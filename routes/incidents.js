@@ -1,0 +1,299 @@
+const express = require('express');
+const { protect, authorize } = require('../middleware/auth');
+const upload = require('../middleware/upload');
+const { apiLimiter, geocodingLimiter } = require('../middleware/rateLimit');
+
+// Import controllers
+const {
+  getIncidents,
+  getIncident,
+  createIncident,
+  updateIncident,
+  deleteIncident,
+  approveIncident,
+  rejectIncident,
+  assignDriver,
+  getNearbyIncidents,
+  getIncidentStats,
+  getDriverIncidents,
+  getHospitalIncidents,
+  getRawHospitalIncidents,
+  debugAllHospitalData,
+  updateDriverStatus,
+  updateHospitalStatus,
+  createRealHospitalData,
+  getIncidentsByDriverStatus,
+  debugHospitalAssignments,
+  getIncidentsByHospitalStatus,
+  getDriverWorkflowDashboard,
+  getHospitalWorkflowDashboard,
+  updateIncidentStatus,
+  createHospitalTestData,
+  debugHospitalQuery,
+  debugHospitalEndpoint,  // This one is missing from exports
+  fixHospitalStatus,   
+  getHospitalDashboard,
+  getDriverIncidentsForSuperAdmin, 
+  updatePatientPickupStatus,  // This one is missing from exports
+} = require('../controllers/incidents');
+
+const router = express.Router();
+
+// Import models
+const Incident = require('../models/Incident');
+const User = require('../models/User');
+
+router.use(apiLimiter);
+
+router.route('/')
+  .get(protect, getIncidents)
+  .post(protect, geocodingLimiter, upload.array('photos', 5), createIncident);
+
+router.route('/stats')
+  .get(protect, getIncidentStats);
+
+
+router.route('/nearby')
+  .get(protect, getNearbyIncidents);
+router.put('/fix-hospital-status', protect, authorize('hospital', 'admin'), fixHospitalStatus);
+router.get('/debug/hospital-endpoint', protect, authorize('hospital'), debugHospitalEndpoint);
+// Debug hospital query endpoint  
+router.get('/debug/hospital-query', protect, authorize('hospital'), debugHospitalQuery);
+router.get('/hospital', protect, authorize('hospital', 'superadmin'), getHospitalDashboard);
+router.put('/:id/patient-pickup', protect, authorize('driver'), updatePatientPickupStatus);
+// Create proper hospital test data
+router.post('/create-hospital-test-data', protect, authorize('hospital', 'admin'), createHospitalTestData);
+router.route('/:id')
+  .get(protect, getIncident)
+  .put(protect, updateIncident)
+  .delete(protect, authorize('admin', 'superadmin'), deleteIncident);
+router.get('/driver/my-incidents', protect, getDriverIncidents);
+router.get('/admin/driver-incidents/:driverId', protect, authorize('superadmin'), getDriverIncidentsForSuperAdmin);
+// Driver workflow routes
+router.put('/:id/driver-status', protect, authorize('driver'), updateDriverStatus);
+router.get('/driver/status/:status', protect, authorize('driver'), getIncidentsByDriverStatus);
+router.get('/driver/workflow', protect, authorize('driver'), getDriverWorkflowDashboard);
+
+// Hospital workflow routes  
+router.put('/:id/hospital-status', protect, authorize('hospital'), updateHospitalStatus);
+router.get('/hospital/status/:status', protect, authorize('hospital'), getIncidentsByHospitalStatus);
+router.get('/debug/hospital-raw', protect, getRawHospitalIncidents);
+router.get('/debug/all-hospital-data', protect, debugAllHospitalData);
+router.get('/hospital/workflow', protect, authorize('hospital', 'superadmin'), getHospitalWorkflowDashboard);
+router.get('/hospital/incidents', protect, authorize('hospital', 'superadmin'), getHospitalIncidents);
+// Test endpoint for ObjectId debugging
+router.get('/debug/objectid-test', async (req, res) => {
+  try {
+    const mongoose = require('mongoose');
+    const testId = new mongoose.Types.ObjectId();
+    
+    res.json({
+      success: true,
+      objectIdTest: {
+        created: testId.toString(),
+        isValid: mongoose.Types.ObjectId.isValid(testId),
+        sampleUser: await User.findOne().select('_id name').lean()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+router.post('/create-real-hospital-data', protect, createRealHospitalData);
+// Hospital incidents route - FIXED
+router.get('/hospital/incidents', protect, authorize('hospital'), getHospitalIncidents);
+
+// Debug hospital assignments route - FIXED
+router.get('/debug/hospital-assignments', protect, authorize('hospital'), debugHospitalAssignments);
+
+// Debug endpoint for hospital setup
+router.get('/debug/hospital-setup', async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const Incident = require('../models/Incident');
+    
+    console.log('🔍 Debug: Checking hospital setup...');
+    
+    // Get all hospital users
+    const hospitalUsers = await User.find({ role: 'hospital' });
+    console.log(`🏥 Found ${hospitalUsers.length} hospital users`);
+    
+    // Get all incidents
+    const allIncidents = await Incident.find({}).sort('-createdAt').limit(20);
+    console.log(`📊 Found ${allIncidents.length} total incidents`);
+    
+    // Get incidents with hospital assignments
+    const hospitalIncidents = await Incident.find({
+      'patientStatus.hospital': { $exists: true, $ne: null }
+    });
+    console.log(`🏥 Found ${hospitalIncidents.length} incidents with hospital assignments`);
+
+    // Get completed incidents assigned to hospitals
+    const completedHospitalIncidents = await Incident.find({
+      status: 'completed',
+      'patientStatus.hospital': { $exists: true, $ne: null }
+    });
+    console.log(`✅ Found ${completedHospitalIncidents.length} completed incidents with hospital assignments`);
+
+    const responseData = {
+      hospitalUsers: hospitalUsers.map(user => ({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        hospital: user.hospital,
+        role: user.role
+      })),
+      totalIncidents: allIncidents.length,
+      hospitalAssignedIncidents: hospitalIncidents.length,
+      completedHospitalIncidents: completedHospitalIncidents.length,
+      recentIncidents: allIncidents.map(inc => ({
+        id: inc._id,
+        status: inc.status,
+        hospitalStatus: inc.hospitalStatus,
+        patientHospital: inc.patientStatus?.hospital,
+        description: inc.description,
+        assignedTo: inc.assignedTo
+      })),
+      hospitalIncidents: hospitalIncidents.map(inc => ({
+        id: inc._id,
+        status: inc.status,
+        hospitalStatus: inc.hospitalStatus,
+        patientHospital: inc.patientStatus?.hospital,
+        description: inc.description,
+        createdAt: inc.createdAt
+      }))
+    };
+
+    console.log('📋 Debug response data prepared');
+    
+    res.json({
+      success: true,
+      data: responseData
+    });
+  } catch (error) {
+    console.error('❌ Error in hospital setup debug:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint for specific hospital
+router.get('/debug/hospital-test/:hospitalName', async (req, res) => {
+  try {
+    const hospitalName = req.params.hospitalName;
+    
+    const incidents = await Incident.find({
+      'patientStatus.hospital': hospitalName
+    });
+
+    const incoming = incidents.filter(inc => 
+      inc.status === 'completed' && 
+      inc.hospitalStatus === 'pending'
+    );
+
+    const received = incidents.filter(inc => 
+      inc.status === 'completed' && 
+      inc.hospitalStatus === 'admitted'
+    );
+
+    res.json({
+      success: true,
+      data: {
+        hospitalName,
+        totalIncidents: incidents.length,
+        incomingCases: incoming.length,
+        receivedCases: received.length,
+        allIncidents: incidents.map(inc => ({
+          id: inc._id,
+          status: inc.status,
+          hospitalStatus: inc.hospitalStatus,
+          patientHospital: inc.patientStatus?.hospital,
+          assignedDriver: inc.assignedTo?.driver
+        }))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Driver incidents route
+router.get('/driver/my-incidents', protect, authorize('driver', 'superadmin'), getDriverIncidents);
+
+// Debug endpoint for department
+router.get('/debug/department/:department', async (req, res) => {
+  try {
+    const { department } = req.params;
+    
+    const incidents = await Incident.find({
+      'assignedTo.department': department
+    }).populate('reportedBy', 'name email phone');
+    
+    console.log(`🔍 Debug: Found ${incidents.length} incidents for department: ${department}`);
+    
+    incidents.forEach(incident => {
+      console.log(`📋 Incident: ${incident._id}, Status: ${incident.status}, Department: ${incident.assignedTo?.department}`);
+    });
+
+    res.json({
+      success: true,
+      department: department,
+      count: incidents.length,
+      incidents: incidents
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint for driver assignments
+router.get('/debug/driver-assignments/:driverId', async (req, res) => {
+  try {
+    const { driverId } = req.params;
+    
+    const incidents = await Incident.find({
+      'assignedTo.driver': driverId
+    })
+    .populate('reportedBy', 'name email phone')
+    .populate('assignedTo.driver', 'name email department');
+    
+    console.log(`🔍 Debug: Found ${incidents.length} incidents for driver: ${driverId}`);
+    
+    incidents.forEach(incident => {
+      console.log(`📋 Incident: ${incident._id}, Status: ${incident.status}, Driver: ${incident.assignedTo?.driver?.name}`);
+    });
+
+    res.json({
+      success: true,
+      driverId: driverId,
+      count: incidents.length,
+      incidents: incidents
+    });
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Action routes
+router.put('/:id/approve', protect, authorize('admin', 'superadmin'), approveIncident);
+router.put('/:id/reject', protect, authorize('admin', 'superadmin'), rejectIncident);
+router.put('/:id/assign', protect, authorize('department', 'admin', 'superadmin'), assignDriver);
+router.put('/:id/status', protect, updateIncidentStatus);
+
+module.exports = router;
