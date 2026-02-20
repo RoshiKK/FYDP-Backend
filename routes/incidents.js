@@ -1,3 +1,352 @@
+/**
+ * @swagger
+ * tags:
+ *   name: Incidents
+ *   description: Incident management endpoints
+ */
+
+/**
+ * @swagger
+ * /incidents:
+ *   get:
+ *     summary: Get all incidents (filtered by user role)
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [pending, approved, rejected, assigned, in_progress, completed]
+ *         description: Filter by incident status
+ *       - in: query
+ *         name: priority
+ *         schema:
+ *           type: string
+ *           enum: [low, medium, high, urgent]
+ *         description: Filter by priority
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [Accident]
+ *         description: Filter by category
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *         description: Items per page
+ *       - in: query
+ *         name: sort
+ *         schema:
+ *           type: string
+ *           default: -createdAt
+ *         description: Sort field and order
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search in description and location
+ *     responses:
+ *       200:
+ *         description: List of incidents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 total:
+ *                   type: integer
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     page:
+ *                       type: integer
+ *                     pages:
+ *                       type: integer
+ *                     limit:
+ *                       type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Incident'
+ *       401:
+ *         description: Not authorized
+ */
+
+/**
+ * @swagger
+ * /incidents:
+ *   post:
+ *     summary: Create a new incident
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - location[coordinates]
+ *             properties:
+ *               description:
+ *                 type: string
+ *                 default: "Accident reported"
+ *               location[coordinates]:
+ *                 type: array
+ *                 items:
+ *                   type: number
+ *                 description: "[longitude, latitude]"
+ *               category:
+ *                 type: string
+ *                 enum: [Accident]
+ *                 default: Accident
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high, urgent]
+ *                 default: high
+ *               photos:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Image files (max 5, 10MB each)
+ *     responses:
+ *       201:
+ *         description: Incident created
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   $ref: '#/components/schemas/Incident'
+ *       400:
+ *         description: Validation error
+ */
+
+/**
+ * @swagger
+ * /incidents/{id}/approve:
+ *   put:
+ *     summary: Approve and assign incident to department
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Incident ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - department
+ *             properties:
+ *               department:
+ *                 type: string
+ *                 enum: [Edhi Foundation, Chippa Ambulance]
+ *                 description: Department to assign
+ *               reason:
+ *                 type: string
+ *                 description: Approval reason
+ *     responses:
+ *       200:
+ *         description: Incident approved
+ *       400:
+ *         description: Invalid department
+ *       403:
+ *         description: Not authorized
+ *       404:
+ *         description: Incident not found
+ */
+
+/**
+ * @swagger
+ * /incidents/{id}/driver-status:
+ *   put:
+ *     summary: Update driver workflow status
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Incident ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [arrived, transporting, delivered, completed]
+ *                 description: New driver status
+ *               hospital:
+ *                 type: string
+ *                 description: Hospital name (required for transporting/delivered)
+ *               patientCondition:
+ *                 type: string
+ *                 description: Patient condition
+ *     responses:
+ *       200:
+ *         description: Status updated
+ *       403:
+ *         description: Not authorized
+ *       404:
+ *         description: Incident not found
+ */
+
+/**
+ * @swagger
+ * /incidents/{id}/patient-pickup:
+ *   put:
+ *     summary: Update patient pickup status (Driver only)
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Incident ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pickupStatus
+ *             properties:
+ *               pickupStatus:
+ *                 type: string
+ *                 enum: [picked_up, taken_by_someone, expired]
+ *                 description: Patient pickup status
+ *               notes:
+ *                 type: string
+ *                 description: Additional notes
+ *     responses:
+ *       200:
+ *         description: Pickup status updated
+ *       403:
+ *         description: Not authorized
+ *       404:
+ *         description: Incident not found
+ */
+
+/**
+ * @swagger
+ * /incidents/driver/my-incidents:
+ *   get:
+ *     summary: Get incidents assigned to current driver
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of driver incidents
+ *       403:
+ *         description: Not a driver
+ */
+
+/**
+ * @swagger
+ * /incidents/hospital/incidents:
+ *   get:
+ *     summary: Get incidents for current hospital
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Hospital incidents
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     incoming:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Incident'
+ *                     admitted:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Incident'
+ *                     discharged:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Incident'
+ */
+
+/**
+ * @swagger
+ * /incidents/nearby:
+ *   get:
+ *     summary: Get nearby incidents
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: longitude
+ *         required: true
+ *         schema:
+ *           type: number
+ *         description: Longitude
+ *       - in: query
+ *         name: latitude
+ *         required: true
+ *         schema:
+ *           type: number
+ *         description: Latitude
+ *       - in: query
+ *         name: maxDistance
+ *         schema:
+ *           type: integer
+ *           default: 5000
+ *         description: Maximum distance in meters
+ *     responses:
+ *       200:
+ *         description: Nearby incidents
+ */
 const express = require('express');
 const { protect, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');

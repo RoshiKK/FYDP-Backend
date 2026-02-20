@@ -1,4 +1,59 @@
-// routes/admin.js
+/**
+ * @swagger
+ * tags:
+ *   name: Admin
+ *   description: Admin operations (Admin/SuperAdmin only)
+ */
+
+/**
+ * @swagger
+ * /admin/dashboard:
+ *   get:
+ *     summary: Get admin dashboard data
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Admin dashboard data
+ *       403:
+ *         description: Not authorized
+ */
+
+/**
+ * @swagger
+ * /admin/incidents/bulk-actions:
+ *   post:
+ *     summary: Perform bulk actions on incidents
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - incidentIds
+ *               - action
+ *             properties:
+ *               incidentIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               action:
+ *                 type: string
+ *                 enum: [approve, reject, assign_department]
+ *               department:
+ *                 type: string
+ *                 enum: [Edhi Foundation, Chippa Ambulance]
+ *               reason:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Bulk action completed
+ */
 const express = require('express');
 const {
   getAdminDashboard,

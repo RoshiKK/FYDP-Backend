@@ -1,3 +1,104 @@
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Location:
+ *       type: object
+ *       required:
+ *         - coordinates
+ *         - address
+ *       properties:
+ *         type:
+ *           type: string
+ *           enum: [Point]
+ *           default: Point
+ *         coordinates:
+ *           type: array
+ *           items:
+ *             type: number
+ *           description: [longitude, latitude]
+ *         address:
+ *           type: string
+ *     
+ *     AssignedTo:
+ *       type: object
+ *       properties:
+ *         department:
+ *           type: string
+ *           enum: [Edhi Foundation, Chippa Ambulance]
+ *         driver:
+ *           type: string
+ *           description: Driver ID
+ *         driverName:
+ *           type: string
+ *         assignedAt:
+ *           type: string
+ *           format: date-time
+ *         assignedBy:
+ *           type: string
+ *           description: User ID who assigned
+ *     
+ *     PatientStatus:
+ *       type: object
+ *       properties:
+ *         condition:
+ *           type: string
+ *         hospital:
+ *           type: string
+ *         medicalNotes:
+ *           type: string
+ *         treatment:
+ *           type: string
+ *         doctor:
+ *           type: string
+ *         bedNumber:
+ *           type: string
+ *         updatedAt:
+ *           type: string
+ *           format: date-time
+ *     
+ *     Action:
+ *       type: object
+ *       properties:
+ *         action:
+ *           type: string
+ *         performedBy:
+ *           type: string
+ *           description: User ID
+ *         timestamp:
+ *           type: string
+ *           format: date-time
+ *         details:
+ *           type: object
+ *     
+ *     Timestamps:
+ *       type: object
+ *       properties:
+ *         reportedAt:
+ *           type: string
+ *           format: date-time
+ *         assignedAt:
+ *           type: string
+ *           format: date-time
+ *         arrivedAt:
+ *           type: string
+ *           format: date-time
+ *         transportingAt:
+ *           type: string
+ *           format: date-time
+ *         deliveredAt:
+ *           type: string
+ *           format: date-time
+ *         admittedAt:
+ *           type: string
+ *           format: date-time
+ *         dischargedAt:
+ *           type: string
+ *           format: date-time
+ *         completedAt:
+ *           type: string
+ *           format: date-time
+ */
 const mongoose = require('mongoose');
 
 const incidentSchema = new mongoose.Schema({

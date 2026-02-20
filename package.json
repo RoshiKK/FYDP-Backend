@@ -30,6 +30,8 @@
     "nodemailer": "^6.9.4",
     "socket.io": "^4.7.2",
     "socket.io-client": "^4.8.1",
+    "swagger-jsdoc": "^6.2.8",
+    "swagger-ui-express": "^5.0.1",
     "xss-clean": "^0.1.4"
   },
   "devDependencies": {

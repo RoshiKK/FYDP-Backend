@@ -6,6 +6,10 @@ const http = require('http');
 const mongoose = require('mongoose');
 const { GridFSBucket } = require('mongodb');
 
+// ✅ Swagger
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
+
 // Load env FIRST
 dotenv.config();
 
@@ -23,12 +27,12 @@ const app = express();
 const server = http.createServer(app);
 
 // =====================
-// CORS CONFIG (FIXED)
+// CORS CONFIG
 // =====================
 const allowedOrigins = [
-  'http://localhost:3000',    // React dev
-  'http://localhost:5173',    // Vite dev
-  'http://10.0.2.2:5000',     // Android emulator
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://10.0.2.2:5000',
   'capacitor://localhost',
   'ionic://localhost',
   ...(process.env.WEB_APP_URL ? [process.env.WEB_APP_URL] : [])
@@ -36,7 +40,6 @@ const allowedOrigins = [
 
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow mobile apps, Postman, curl (no origin)
     if (!origin) return callback(null, true);
 
     if (allowedOrigins.includes(origin)) {
@@ -99,7 +102,10 @@ const serveGridFSImage = async (req, res) => {
     const downloadStream = bucket.openDownloadStreamByName(filename);
 
     downloadStream.on('error', () => {
-      res.status(404).json({ success: false, message: 'File not found' });
+      res.status(404).json({
+        success: false,
+        message: 'File not found'
+      });
     });
 
     downloadStream.pipe(res);
@@ -129,6 +135,30 @@ app.get('/api/health', (req, res) => {
 });
 
 // =====================
+// SWAGGER DOCUMENTATION
+// =====================
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  explorer: true,
+  customCss: '.swagger-ui .topbar { display: none }',
+  customSiteTitle: "Incident Reporting System API Documentation",
+  swaggerOptions: {
+    persistAuthorization: true,
+    displayRequestDuration: true,
+    filter: true,
+    tryItOutEnabled: true
+  }
+}));
+
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerSpec);
+});
+
+app.get('/docs', (req, res) => {
+  res.redirect('/api-docs');
+});
+
+// =====================
 // API ROUTES
 // =====================
 app.use('/api', require('./routes'));
@@ -153,9 +183,10 @@ app.use('*', (req, res) => {
 });
 
 // =====================
-// START SERVER (CLOUD SAFE)
+// START SERVER
 // =====================
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🔧 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📚 Swagger Docs: http://localhost:${PORT}/api-docs`);
 });

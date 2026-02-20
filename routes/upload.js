@@ -1,4 +1,82 @@
-// routes/upload.js - COMPLETE FIXED VERSION
+/**
+ * @swagger
+ * tags:
+ *   name: Upload
+ *   description: File upload endpoints
+ */
+
+/**
+ * @swagger
+ * /upload/incident-photos:
+ *   post:
+ *     summary: Upload incident photos to GridFS
+ *     tags: [Upload]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               photos:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Image files (max 5, 10MB each)
+ *     responses:
+ *       200:
+ *         description: Photos uploaded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       filename:
+ *                         type: string
+ *                       originalName:
+ *                         type: string
+ *                       size:
+ *                         type: number
+ *                       mimetype:
+ *                         type: string
+ *       400:
+ *         description: Upload failed
+ */
+
+/**
+ * @swagger
+ * /upload/image/{filename}:
+ *   get:
+ *     summary: Get image from GridFS by filename
+ *     tags: [Upload]
+ *     parameters:
+ *       - in: path
+ *         name: filename
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Image filename
+ *     responses:
+ *       200:
+ *         description: Image file
+ *         content:
+ *           image/*:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       404:
+ *         description: Image not found
+ */
 const express = require('express');
 const router = express.Router();
 const { uploadMiddleware, handleUploadErrors } = require('../middleware/gridfsUpload');
