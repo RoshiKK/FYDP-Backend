@@ -53,14 +53,15 @@ exports.getIncidents = async (req, res, next) => {
       baseFilter.status = { $in: ['assigned', 'in_progress'] };
       
     } else if (req.user.role === 'department') {
-      console.log('🏢 Department query for:', req.user.department);
-      
-      if (req.user.department) {
-        baseFilter['assignedTo.department'] = req.user.department;
-        // Show incidents that are assigned to department but not yet completed
-        baseFilter.status = { $in: ['approved', 'assigned', 'in_progress'] };
-      }
-    } else if (req.user.role === 'hospital') {
+  console.log('🏢 Department query for:', req.user.department);
+  
+  // Show approved incidents (available to all depts) OR incidents assigned to this specific dept
+  baseFilter.$or = [
+    { status: 'approved', 'assignedTo.department': { $exists: false } }, // available to all
+    { 'assignedTo.department': req.user.department }                       // assigned to this dept
+  ];
+  baseFilter.status = { $in: ['approved', 'assigned', 'in_progress'] };
+}else if (req.user.role === 'hospital') {
       if (req.user.hospital) {
         baseFilter['patientStatus.hospital'] = req.user.hospital;
       }
@@ -1445,85 +1446,113 @@ exports.getIncident = async (req, res, next) => {
   }
 };
 
-// controllers/incidents.js - Update createIncident method
 exports.createIncident = async (req, res, next) => {
   try {
-    // Add user to req.body
+    // Step 1: Set user
     req.body.reportedBy = req.user.id;
 
+    // Step 2: FIX LOCATION - handles all formats from multipart
+    try {
+      let loc = req.body.location;
+
+      // If it's a string, try JSON parse first
+      if (typeof loc === 'string') {
+        try { 
+          loc = JSON.parse(loc); 
+          console.log('📍 Parsed location from JSON string');
+        } catch(e) {
+          console.log('📍 Not JSON, will try other parsing');
+        }
+      }
+
+      // If coordinates is still a string like "67.111,24.909" or "[67.111,24.909]"
+      if (loc && typeof loc.coordinates === 'string') {
+        const cleaned = loc.coordinates.replace(/[\[\]\s]/g, ''); // remove [], spaces
+        const parts = cleaned.split(',').map(Number);
+        if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+          loc.coordinates = parts;
+          console.log('📍 Fixed coordinates from string:', loc.coordinates);
+        }
+      }
+
+      // Ensure type is always Point
+      loc.type = 'Point';
+
+      // If address missing, set fallback (geocoding will update it below)
+      if (!loc.address) {
+        loc.address = 'Address resolving...';
+      }
+
+      req.body.location = loc;
+      console.log('📍 Location after fix:', JSON.stringify(req.body.location));
+
+    } catch (locationError) {
+      console.error('❌ Location parse error:', locationError.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid location data provided',
+        error: locationError.message
+      });
+    }
+
+    // Step 3: Set defaults
+    if (!req.body.category) req.body.category = 'Accident';
+    if (!req.body.priority) req.body.priority = 'high';
+    if (!req.body.description || req.body.description.trim() === '') {
+      req.body.description = 'Accident reported with photo';
+    }
+
+    // Step 4: Handle file uploads
     console.log('📝 Creating incident with data:', {
       reportedBy: req.user.id,
       hasFiles: !!req.files,
       fileCount: req.files?.length || 0
     });
 
-    // Handle file uploads - GridFS files are already processed
     if (req.files && req.files.length > 0) {
       console.log('📸 Processing GridFS uploaded files:', req.files.length);
-      
-      // DEBUG: Log each file
+
       req.files.forEach((file, index) => {
         console.log(`📁 File ${index + 1}:`, {
           filename: file.filename,
           originalname: file.originalname,
           size: file.size,
           mimetype: file.mimetype,
-          id: file.id, // GridFS ID
-          metadata: file.metadata
         });
       });
-      
-      // Store GridFS file information
+
       req.body.photos = req.files.map(file => ({
         filename: file.filename,
         originalName: file.originalname,
         size: file.size,
         mimetype: file.mimetype,
         uploadedAt: new Date(),
-        // CRITICAL FIX: Use consistent URL pattern
-        url: `/api/upload/image/${file.filename}` // Always use singular "upload"
+        url: `/api/upload/image/${file.filename}`
       }));
     }
 
-    // AI detection simulation
+    // Step 5: AI detection score
     req.body.aiDetectionScore = Math.floor(Math.random() * 100);
 
-    // Set default category to Accident and high priority
-    if (!req.body.category) {
-      req.body.category = 'Accident';
-    }
-    if (!req.body.priority) {
-      req.body.priority = 'high';
-    }
+    // Step 6: Get real address from coordinates using geocoding
+    if (
+      req.body.location &&
+      Array.isArray(req.body.location.coordinates) &&
+      req.body.location.coordinates.length === 2
+    ) {
+      const [longitude, latitude] = req.body.location.coordinates;
+      console.log(`📍 Getting address for: ${latitude}, ${longitude}`);
 
-    // Set default description if empty
-    if (!req.body.description || req.body.description.trim() === '') {
-      req.body.description = 'Accident reported with photo';
-    }
-
-    // ENHANCED LOCATION HANDLING WITH OPENSTREETMAP
-    if (req.body.location && typeof req.body.location === 'object') {
-      if (req.body.location.coordinates && Array.isArray(req.body.location.coordinates)) {
-        req.body.location.type = 'Point';
-        
-        // Get detailed address from coordinates using OpenStreetMap
-        const [longitude, latitude] = req.body.location.coordinates;
-        
-        console.log(`📍 Getting detailed address for: ${latitude}, ${longitude}`);
-        
-        // Use the enhanced geocoding service
+      try {
         const address = await GeocodingService.getAddressFromCoordinates(latitude, longitude);
-        
-        // Update location with proper detailed address
         req.body.location.address = address;
-        console.log(`📍 Location resolved: ${address}`);
-        
-        // Also store the raw coordinates for backup
-        req.body.location.rawCoordinates = {
-          latitude: latitude,
-          longitude: longitude
-        };
+        console.log(`📍 Address resolved: ${address}`);
+      } catch (geoError) {
+        console.log('⚠️ Geocoding failed, using fallback address:', geoError.message);
+        req.body.location.address = `${latitude}, ${longitude}`; // coordinates as fallback
       }
+
+      req.body.location.rawCoordinates = { latitude, longitude };
     }
 
     console.log('🚀 Creating incident with final data:', {
@@ -1534,9 +1563,10 @@ exports.createIncident = async (req, res, next) => {
       location: req.body.location
     });
 
+    // Step 7: Create incident
     const incident = await Incident.create(req.body);
 
-    // Add creation action
+    // Step 8: Add creation action log
     incident.actions.push({
       action: 'created',
       performedBy: req.user.id,
@@ -1544,36 +1574,33 @@ exports.createIncident = async (req, res, next) => {
     });
     await incident.save();
 
-    // Populate the response
+    // Step 9: Populate response
     await incident.populate('reportedBy', 'name email phone');
 
-    // Send emergency alerts
+    // Step 10: Send alerts
     await AlertService.sendEmergencyAlerts(incident._id);
 
-    // Emit real-time update
+    // Step 11: Emit real-time update
     if (req.io) {
-      req.io.emit('newIncident', incident);
+      req.io.to('admins').emit('newIncident', incident); // 👈 targeted
     }
 
-    console.log('✅ Incident created with photos:', {
+    console.log('✅ Incident created successfully:', {
       incidentId: incident._id,
       photoCount: incident.photos?.length || 0,
-      photos: incident.photos?.map(p => ({
-        filename: p.filename,
-        url: p.url
-      }))
+      location: incident.location?.address
     });
 
     res.status(201).json({
       success: true,
       data: incident
     });
+
   } catch (error) {
-    console.error('❌ Error creating incident:', error);
+    console.error('❌ Error creating incident:', error.message);
     next(error);
   }
 };
-
 // @desc    Update incident
 // @route   PUT /api/incidents/:id
 // @access  Private
@@ -1635,93 +1662,525 @@ exports.updateIncident = async (req, res, next) => {
 // @desc    Approve incident
 // @route   PUT /api/incidents/:id/approve
 // @access  Private (Admin/SuperAdmin)
+// @desc    Approve incident
+// @route   PUT /api/incidents/:id/approve
+// @access  Private (Admin/SuperAdmin)
+
+
+// Server-side assignment controller
+class IncidentAssignmentController {
+  constructor() {
+    this.pendingIncidents = new Map(); // incidentId -> { timer, nearestDepartment }
+  }
+
+  async approveIncident(incidentId) {
+    const incident = await Incident.findById(incidentId);
+    
+    // Calculate distances for all departments
+    const departmentDistances = await this.calculateDistancesForAllDepartments(incident);
+    
+    // Sort by distance
+    const sorted = departmentDistances.sort((a, b) => a.distance - b.distance);
+    
+    // Store in memory with timer
+    this.pendingIncidents.set(incidentId, {
+      incident,
+      sortedDepartments: sorted,
+      nearest: sorted[0],
+      claimedBy: null,
+      timeout: setTimeout(() => this.handleAssignmentTimeout(incidentId), 15000) // 15 seconds
+    });
+
+    // Notify ALL departments with distance information
+    this.notifyDepartments(incidentId, sorted);
+    
+    return {
+      success: true,
+      message: 'Incident available for assignment',
+      distances: sorted
+    };
+  }
+
+  async calculateDistancesForAllDepartments(incident) {
+    const departments = await Department.find({ active: true });
+    const incidentLat = incident.location.coordinates[1];
+    const incidentLng = incident.location.coordinates[0];
+    
+    const distances = [];
+    
+    for (const dept of departments) {
+      // Get all active drivers for this department
+      const drivers = await User.find({
+        role: 'driver',
+        department: dept.name,
+        status: 'active'
+      }).select('name location status');
+      
+      // Find closest driver in this department
+      let minDistance = Infinity;
+      let closestDriver = null;
+      
+      for (const driver of drivers) {
+        if (driver.location && driver.location.coordinates) {
+          const distance = this.calculateDistance(
+            incidentLat, incidentLng,
+            driver.location.coordinates[1], driver.location.coordinates[0]
+          );
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            closestDriver = driver;
+          }
+        }
+      }
+      
+      distances.push({
+        department: dept.name,
+        distance: minDistance === Infinity ? null : minDistance,
+        closestDriver: closestDriver ? {
+          id: closestDriver._id,
+          name: closestDriver.name,
+          distance: minDistance
+        } : null,
+        availableDrivers: drivers.length
+      });
+    }
+    
+    return distances.filter(d => d.distance !== null);
+  }
+
+  calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+      Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+  }
+
+  async handleAssignmentTimeout(incidentId) {
+    const pending = this.pendingIncidents.get(incidentId);
+    if (!pending || pending.claimedBy) return;
+    
+    // No one claimed - make it available to all
+    this.pendingIncidents.delete(incidentId);
+    
+    // Notify all departments it's now open
+    this.notifyOpenToAll(incidentId);
+  }
+
+  async claimIncident(incidentId, departmentName, driverId) {
+    const pending = this.pendingIncidents.get(incidentId);
+    
+    if (!pending) {
+      return { success: false, message: 'Incident no longer available' };
+    }
+    
+    // Check if already claimed
+    if (pending.claimedBy) {
+      return { 
+        success: false, 
+        message: `Already claimed by ${pending.claimedBy}`,
+        claimedBy: pending.claimedBy
+      };
+    }
+    
+    // Check if this department is the nearest
+    const isNearest = pending.nearest.department === departmentName;
+    const timeSinceApproval = Date.now() - pending.incident.assignedTo.assignedAt;
+    
+    // If nearest department, allow immediate claim
+    if (isNearest) {
+      clearTimeout(pending.timeout);
+      pending.claimedBy = departmentName;
+      
+      // Assign to driver
+      await this.assignToDriver(incidentId, departmentName, driverId);
+      
+      // Notify others it's taken
+      this.notifyClaimed(incidentId, departmentName);
+      
+      return { 
+        success: true, 
+        message: 'Incident claimed (nearest department)',
+        priority: 'nearest'
+      };
+    }
+    
+    // If not nearest, wait 10 seconds before allowing
+    if (timeSinceApproval < 10000) {
+      return {
+        success: false,
+        message: `Nearest department (${pending.nearest.department}) has priority for 10 more seconds`,
+        waitTime: 10000 - timeSinceApproval,
+        nearestDepartment: pending.nearest.department,
+        nearestDistance: pending.nearest.distance
+      };
+    }
+    
+    // After 10 seconds, allow any department to claim
+    clearTimeout(pending.timeout);
+    pending.claimedBy = departmentName;
+    
+    await this.assignToDriver(incidentId, departmentName, driverId);
+    this.notifyClaimed(incidentId, departmentName);
+    
+    return { 
+      success: true, 
+      message: 'Incident claimed (after priority window)',
+      priority: 'standard'
+    };
+  }
+
+  async assignToDriver(incidentId, departmentName, driverId) {
+    const incident = await Incident.findById(incidentId);
+    
+    incident.assignedTo = {
+      department: departmentName,
+      driver: driverId,
+      assignedAt: new Date(),
+      assignmentType: 'department_claimed'
+    };
+    
+    incident.status = 'assigned';
+    await incident.save();
+    
+    // Notify driver
+    // ...
+  }
+
+  notifyDepartments(incidentId, distances) {
+    // Emit to all departments with distance info
+    if (global.io) {
+      global.io.to('departments').emit('incidentAvailable', {
+        incidentId,
+        distances,
+        yourRank: 'Will be calculated per department',
+        priorityWindow: 10000
+      });
+    }
+  }
+
+  notifyClaimed(incidentId, claimedBy) {
+    if (global.io) {
+      global.io.to('departments').emit('incidentClaimed', {
+        incidentId,
+        claimedBy,
+        message: `Incident claimed by ${claimedBy}`
+      });
+    }
+  }
+
+  notifyOpenToAll(incidentId) {
+    if (global.io) {
+      global.io.to('departments').emit('incidentOpenToAll', {
+        incidentId,
+        message: 'Incident now available to all departments'
+      });
+    }
+  }
+}
+
+// Initialize controller
+const assignmentController = new IncidentAssignmentController();
+// In incidentController.js
 exports.approveIncident = async (req, res, next) => {
   try {
-    const { department } = req.body; // Get department from request body
     const incident = await Incident.findById(req.params.id);
 
-    if (!incident) {
-      return res.status(404).json({
-        success: false,
-        message: 'Incident not found'
+    if (!incident || incident.status !== 'pending') {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid incident' 
       });
     }
 
-    // Validate department
-    const validDepartments = ['Edhi Foundation', 'Chippa Ambulance'];
-    if (!department || !validDepartments.includes(department)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Valid department (Edhi Foundation or Chippa Ambulance) is required'
-      });
-    }
-
-    console.log(`Assigning incident ${incident._id} to ${department}`);
-
-    // Update incident with proper assignment
-    incident.status = 'assigned';
+    // Approve incident
+    incident.status = 'approved';
     incident.assignedTo = {
-      department: department,
       assignedAt: new Date(),
       assignedBy: req.user.id
     };
 
-    // Add action log
-    if (!incident.actions) {
-      incident.actions = [];
-    }
-    
     incident.actions.push({
-      action: 'approved_and_assigned',
+      action: 'approved',
       performedBy: req.user.id,
-      details: { 
-        reason: req.body.reason || 'Approved by admin',
-        department: department
-      }
+      details: { reason: req.body.reason || 'Approved by admin' }
     });
 
     await incident.save();
-    
-    // Populate for response
     await incident.populate('reportedBy', 'name email phone');
 
-    console.log(`Incident ${incident._id} approved and assigned to ${department}`);
+    // Add to assignment queue
+    const queueResult = await req.assignmentQueue.addIncidentToQueue(incident);
 
-    // Notify the assigned department
-    const departmentUsers = await User.find({
-      role: 'department',
-      department: department,
-      status: 'active'
-    });
-
-    for (const user of departmentUsers) {
-      await Notification.create({
-        recipient: user._id,
-        title: 'New Incident Assigned',
-        message: `A new ${incident.category} incident has been assigned to your department.`,
-        type: 'assignment',
-        relatedIncident: incident._id
-      });
-
-      console.log(`Notification sent to ${user.email} (${department})`);
-    }
-
-    // Emit real-time update
-    if (req.io) {
-      req.io.emit('incidentApproved', incident);
-    }
+     if (req.io) {
+      console.log(`📡 Emitting incidentApproved to departments for incident: ${incident._id}`);
+      
+      // Emit to all departments
+      req.io.to('departments').emit('incidentApproved', incident);}
+    console.log(`✅ Incident ${incident._id} approved and added to queue`);
 
     res.status(200).json({
       success: true,
       data: incident,
-      message: `Incident assigned to ${department}`
+      queueStatus: queueResult ? {
+        inQueue: true,
+        bestETA: queueResult.bestDepartment?.bestETA,
+        totalDepartments: queueResult.departments.length
+      } : { inQueue: false, reason: 'No available drivers' }
     });
+
   } catch (error) {
     console.error('Error approving incident:', error);
     next(error);
   }
 };
 
+
+
+// @desc    Driver accepts an assigned incident
+// @route   PUT /api/incidents/:id/accept
+// @access  Private (Driver)
+   exports.acceptIncident = async (req, res, next) => {
+  try {
+    const incidentId = req.params.id;
+    const driverId = req.user.id;
+
+    console.log(`✅ Driver ${driverId} accepting incident ${incidentId}`);
+
+    const incident = await Incident.findById(incidentId);
+
+    if (!incident) {
+      return res.status(404).json({ success: false, message: 'Incident not found' });
+    }
+
+    const assignedDriverId = incident.assignedTo?.driver?.toString();
+    const currentDriverId = driverId.toString();
+
+    if (assignedDriverId !== currentDriverId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not assigned to this incident'
+      });
+    }
+
+    // ✅ CRITICAL FIX: Clear the 2-minute timer so it doesn't fire after acceptance
+    const rejectionTimerService = require('../services/rejectiontimer');
+    const cleared = rejectionTimerService.clearTimer(incidentId);
+    console.log(`⏱️ Timer cleared on acceptance: ${cleared}`);
+
+    incident.driverStatus = 'assigned';
+
+    incident.actions.push({
+      action: 'driver_accepted',
+      performedBy: driverId,
+      details: { message: 'Driver accepted the incident' },
+      timestamp: new Date()
+    });
+
+    await incident.save();
+    await incident.populate('reportedBy', 'name email phone');
+    await incident.populate('assignedTo.driver', 'name phone');
+
+    if (req.io) {
+      req.io.to('departments').emit('incidentUpdated', incident);
+      req.io.to(`dept_${incident.assignedTo?.department}`).emit('driverAccepted', {
+        incidentId: incident._id,
+        driverName: req.user.name,
+        message: 'Driver has accepted the incident'
+      });
+    }
+
+    console.log(`✅ Incident ${incidentId} accepted by driver ${driverId}`);
+
+    return res.status(200).json({
+      success: true,
+      data: incident,
+      message: 'Incident accepted successfully'
+    });
+
+  } catch (error) {
+    console.error('❌ Error accepting incident:', error);
+    next(error);
+  }
+};
+
+// // @desc    Driver rejects an assigned incident
+// // @route   PUT /api/incidents/:id/reject
+// // @access  Private (Driver)
+// exports.rejectIncidentDriver = async (req, res, next) => {
+//   try {
+//     const incidentId = req.params.id;
+//     const driverId = req.user.id;
+//     const { reason } = req.body;
+
+//     console.log(`❌ Driver ${driverId} rejecting incident ${incidentId}`);
+
+//     const incident = await Incident.findById(incidentId);
+
+//     if (!incident) {
+//       return res.status(404).json({ success: false, message: 'Incident not found' });
+//     }
+
+//     const assignedDriverId = incident.assignedTo?.driver?.toString();
+//     if (assignedDriverId !== driverId.toString()) {
+//       return res.status(403).json({
+//         success: false,
+//         message: 'You are not assigned to this incident'
+//       });
+//     }
+
+//     const departmentName = incident.assignedTo?.department;
+
+//     // Unassign the driver and revert to approved status
+//     incident.assignedTo = {
+//       department: departmentName,  // keep department, remove driver
+//       assignedAt: incident.assignedTo?.assignedAt,
+//       assignedBy: incident.assignedTo?.assignedBy
+//     };
+//     incident.status = 'approved';
+//     incident.driverStatus = undefined;
+
+//     incident.actions.push({
+//       action: 'driver_rejected',
+//       performedBy: driverId,
+//       details: { reason: reason || 'Driver rejected the incident' },
+//       timestamp: new Date()
+//     });
+
+//     await incident.save();
+//     await incident.populate('reportedBy', 'name email phone');
+
+//     // Notify department so they can reassign
+//     if (req.io) {
+//       req.io.to('departments').emit('incidentUpdated', incident);
+//       req.io.to(`dept_${departmentName}`).emit('driverRejected', {
+//         incidentId: incident._id,
+//         driverName: req.user.name,
+//         reason: reason || 'No reason provided',
+//         message: 'Driver rejected the incident — please reassign'
+//       });
+//     }
+
+//     console.log(`✅ Incident ${incidentId} rejected by driver, returned to department`);
+
+//     return res.status(200).json({
+//       success: true,
+//       data: incident,
+//       message: 'Incident rejected successfully'
+//     });
+
+//   } catch (error) {
+//     console.error('❌ Error rejecting incident:', error);
+//     next(error);
+//   }
+// };
+// New endpoint for claiming incident
+exports.claimIncident = async (req, res, next) => {
+  try {
+    const { incidentId, driverId } = req.body;
+    const departmentName = req.user.department;
+    
+    const result = await req.assignmentQueue.claimIncident(
+      incidentId, 
+      departmentName, 
+      driverId
+    );
+    
+    res.json({
+      success: result.success,
+      message: result.message,
+      data: result
+    });
+    
+  } catch (error) {
+    console.error('Claim error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+// exports.approveIncident = async (req, res, next) => {
+//   try {
+//     const incident = await Incident.findById(req.params.id);
+
+//     if (!incident) {
+//       return res.status(404).json({
+//         success: false,
+//         message: 'Incident not found'
+//       });
+//     }
+
+//     if (incident.status !== 'pending') {
+//       return res.status(400).json({
+//         success: false,
+//         message: `Incident is already ${incident.status}`
+//       });
+//     }
+
+//     // Simply approve — no department assignment
+//     incident.status = 'approved';
+//     incident.assignedTo = {
+//       assignedAt: new Date(),
+//       assignedBy: req.user.id
+//     };
+
+//     incident.actions.push({
+//       action: 'approved',
+//       performedBy: req.user.id,
+//       details: { reason: req.body.reason || 'Approved by admin' }
+//     });
+
+//     await incident.save();
+//     await incident.populate('reportedBy', 'name email phone');
+
+//     console.log(`✅ Incident ${incident._id} approved — broadcasting to ALL departments`);
+
+//     // Notify ALL department users (not just one)
+//     const departmentUsers = await User.find({
+//       role: 'department',
+//       status: 'active'
+//     });
+
+//     for (const user of departmentUsers) {
+//       await Notification.create({
+//         recipient: user._id,
+//         title: 'New Incident Approved',
+//         message: `A new ${incident.category} incident is available for assignment.`,
+//         type: 'assignment',
+//         relatedIncident: incident._id
+//       });
+//     }
+
+//     // Emit to ALL departments via socket
+//     if (req.io) {
+//       // Check connected sockets
+//       const roomSockets = await req.io.in('departments').fetchSockets();
+//       console.log(`📡 Departments room has ${roomSockets.length} connected sockets`);
+      
+//       // Emit to departments room
+//       req.io.to('departments').emit('incidentApproved', incident);
+//       console.log(`✅ Emitted incidentApproved to departments room`);
+      
+//       // Also emit to admins
+//       req.io.to('admins').emit('incidentApproved', incident);
+//     }
+
+//     res.status(200).json({
+//       success: true,
+//       data: incident,
+//       message: 'Incident approved and broadcasted to all departments'
+//     });
+//   } catch (error) {
+//     console.error('Error approving incident:', error);
+//     next(error);
+//   }
+// };
 // @desc    Assign incident to department
 // @route   PUT /api/incidents/:id/assign
 // @access  Private (Admin/SuperAdmin)
@@ -1794,7 +2253,7 @@ exports.rejectIncident = async (req, res, next) => {
 
     // Emit real-time update
     if (req.io) {
-      req.io.emit('incidentRejected', incident);
+req.io.to(`citizen_${incident.reportedBy}`).emit('incidentRejected', incident);
     }
 
     res.status(200).json({
@@ -1908,49 +2367,94 @@ exports.getHospitalDashboard = async (req, res, next) => {
 // @desc    Assign driver to incident - ENHANCED VERSION
 // @route   PUT /api/incidents/:id/assign
 // @access  Private (Department/Admin/SuperAdmin)
+// @desc    Assign driver to incident - ENHANCED VERSION with 2-minute timer
+// @route   PUT /api/incidents/:id/assign
+// @access  Private (Department/Admin/SuperAdmin)
 exports.assignDriver = async (req, res, next) => {
   try {
     const { driverId } = req.body;
-    const incident = await Incident.findById(req.params.id);
+    
+    // Load the rejection timer service
+    const rejectionTimerService = require('../services/rejectiontimer');
+    
+    // Initialize timer service with io if not already done
+    if (req.io && !rejectionTimerService.io) {
+      rejectionTimerService.initialize(req.io);
+      console.log('✅ RejectionTimerService initialized with Socket.IO');
+    }
 
+    console.log(`🚗 Assigning driver ${driverId} to incident ${req.params.id} by department ${req.user.department}`);
+
+    // 🔒 ATOMIC CHECK — prevent double assignment
+    const incident = await Incident.findOneAndUpdate(
+      { 
+        _id: req.params.id,
+        // Only assign if NOT already claimed by a department
+        $or: [
+          { 'assignedTo.driver': { $exists: false } },
+          { 'assignedTo.driver': null }
+        ]
+      },
+      { 
+        $set: { 
+          'assignedTo.claimedAt': new Date(),
+          'assignedTo.department': req.user.department 
+        } 
+      },
+      { new: false } // return original to check if it was unclaimed
+    );
+
+    // If null — another department already claimed it
     if (!incident) {
-      return res.status(404).json({
+      const takenIncident = await Incident.findById(req.params.id)
+        .populate('assignedTo.driver', 'name');
+      
+      console.log(`⚠️ Incident already claimed by ${takenIncident?.assignedTo?.department}`);
+      
+      return res.status(409).json({
         success: false,
-        message: 'Incident not found'
+        message: `Incident already claimed by ${takenIncident?.assignedTo?.department}`,
+        takenBy: takenIncident?.assignedTo?.department
       });
     }
 
+    // Verify driver exists and is a driver
     const driver = await User.findById(driverId);
     if (!driver || driver.role !== 'driver') {
+      console.log(`❌ Invalid driver ID: ${driverId}`);
       return res.status(400).json({
         success: false,
         message: 'Invalid driver ID'
       });
     }
 
-    console.log(`🚗 Assigning driver ${driver.name} (${driverId}) to incident ${incident._id}`);
+    console.log(`✅ Driver found: ${driver.name} (${driver.department})`);
 
-    // ENHANCED: Update incident with proper driver assignment
+    // Initialize rejectedDrivers array if not present
+    if (!incident.rejectedDrivers) {
+      incident.rejectedDrivers = [];
+    }
+
+    // Now do the full assignment
     incident.assignedTo = {
-      department: req.user.department || incident.assignedTo?.department,
+      department: req.user.department,
       driver: driverId,
       assignedAt: new Date(),
       assignedBy: req.user.id,
       driverName: driver.name
     };
-    
-    // CRITICAL FIX: Update status to make it visible to driver
+
     incident.status = 'assigned';
     incident.departmentStatus = 'assigned';
+    incident.driverStatus = 'pending_acceptance'; // Driver must accept within 2 minutes
 
-    // Add action log
     incident.actions.push({
       action: 'driver_assigned',
       performedBy: req.user.id,
       details: { 
-        driver: driverId, 
+        driver: driverId,
         driverName: driver.name,
-        department: req.user.department 
+        department: req.user.department
       },
       timestamp: new Date()
     });
@@ -1961,103 +2465,984 @@ exports.assignDriver = async (req, res, next) => {
     await incident.populate('reportedBy', 'name email phone');
     await incident.populate('assignedTo.driver', 'name phone department');
 
-    console.log(`✅ Driver ${driver.name} assigned to incident ${incident._id} successfully`);
-
-    // Notify driver
+    // Create database notification for the driver
     await Notification.create({
       recipient: driverId,
       title: 'New Incident Assigned',
-      message: `You have been assigned to a new ${incident.category} incident at ${incident.location?.address || incident.location}`,
+      message: `You have been assigned to a ${incident.category} incident at ${incident.location?.address}`,
       type: 'assignment',
-      relatedIncident: incident._id
+      relatedIncident: incident._id,
+      data: {
+        incidentId: incident._id,
+        action: 'assignment',
+        department: req.user.department
+      }
     });
 
-    // Emit real-time update
+    // 📡 Emit socket events for real-time updates
     if (req.io) {
-      req.io.emit('driverAssigned', { incident, driver });
+      // 1. Notify the specific driver in their personal room
+      req.io.to(`driver_${driverId}`).emit('incidentAssigned', {
+        incident: incident,
+        eta: null,
+        distance: null,
+        message: 'New incident assigned to you',
+        assignedAt: new Date().toISOString()
+      });
+      console.log(`📡 Emitted incidentAssigned to driver_${driverId}`);
+
+      // 2. Notify ALL departments that this incident is taken (race finished)
+      req.io.to('departments').emit('incidentClaimed', {
+        incidentId: incident._id,
+        claimedBy: req.user.department,
+        driverName: driver.name,
+        message: `Incident claimed by ${req.user.department}`
+      });
+
+      // 3. Notify the specific department that driver was assigned
+      req.io.to(`dept_${req.user.department}`).emit('driverAssigned', {
+        incidentId: incident._id,
+        driverName: driver.name,
+        driverId: driverId,
+        message: `Driver ${driver.name} assigned to incident`
+      });
+
+      // 4. Notify admins
+      req.io.to('admins').emit('driverAssigned', { 
+        incident: incident, 
+        driver: {
+          _id: driver._id,
+          name: driver.name,
+          department: driver.department
+        }
+      });
+
+      // 5. Notify citizen who reported (if citizen tracking)
+      if (incident.reportedBy) {
+        req.io.to(`citizen_${incident.reportedBy._id || incident.reportedBy}`).emit('incidentUpdated', {
+          incidentId: incident._id,
+          status: 'assigned',
+          message: 'A driver has been assigned to your incident'
+        });
+      }
     }
+
+    // ✅ Start 2-minute acceptance timer
+    try {
+      rejectionTimerService.startTimer(
+        incident._id.toString(),
+        driverId.toString(),
+        req.user.department,
+        async (incidentId, timedOutDriverId, dept, reason) => {
+          // Timer fired — treat as rejection and reassign
+          console.log(`🔄 TIMEOUT: Driver ${timedOutDriverId} did not respond within 2 minutes for incident ${incidentId}`);
+          
+          // Check if incident still exists and is still pending_acceptance
+          const currentIncident = await Incident.findById(incidentId)
+            .populate('assignedTo.driver', 'name');
+          
+          if (!currentIncident) {
+            console.log(`❌ Incident ${incidentId} no longer exists, skipping reassignment`);
+            return;
+          }
+          
+          // Only auto-reassign if still pending_acceptance and same driver
+          if (currentIncident.driverStatus === 'pending_acceptance' && 
+              currentIncident.assignedTo?.driver?._id?.toString() === timedOutDriverId) {
+            
+            console.log(`🔄 Auto-reassigning incident ${incidentId} - driver ${timedOutDriverId} timed out`);
+            
+            // Call the reassignment function
+            const User = require('../models/User');
+            const timedOutDriver = await User.findById(timedOutDriverId);
+            
+            await _performReassignment(
+              incidentId, 
+              timedOutDriverId, 
+              dept, 
+              'timeout', 
+              req.io,
+              timedOutDriver?.name || 'Driver',
+              'Driver did not respond within 2 minutes'
+            );
+          } else {
+            console.log(`ℹ️ Incident ${incidentId} no longer pending (status: ${currentIncident.driverStatus})`);
+          }
+        }
+      );
+      console.log(`⏱️ Started 2-minute acceptance timer for incident ${incident._id}, driver ${driver.name}`);
+    } catch (timerError) {
+      console.error('❌ Error starting rejection timer:', timerError);
+      // Continue even if timer fails - incident is still assigned
+    }
+
+    console.log(`✅ Driver ${driver.name} assigned successfully to incident ${incident._id}`);
 
     res.status(200).json({
       success: true,
       data: incident,
-      message: `Driver ${driver.name} assigned successfully`
+      message: `Driver ${driver.name} assigned successfully. 2-minute acceptance window started.`,
+      timerStarted: true
     });
+
   } catch (error) {
     console.error('❌ Error assigning driver:', error);
-    next(error);
+    console.error('❌ Error stack:', error.stack);
+    
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error assigning driver',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
   }
 };
 
+// Helper function for reassignment (make sure this is defined in your file)
+async function _performReassignment(incidentId, rejectedDriverId, departmentName, rejectionType, io, driverName, reason) {
+  try {
+    const rejectionTimerService = require('../services/rejectiontimer');
+    const User = require('../models/User');
+    const Incident = require('../models/Incident');
+
+    console.log(`🔄 Performing reassignment for incident ${incidentId}, rejected driver: ${rejectedDriverId}`);
+
+    const incident = await Incident.findById(incidentId);
+    if (!incident) {
+      console.log(`❌ Incident ${incidentId} not found for reassignment`);
+      return { success: false, message: 'Incident not found' };
+    }
+
+
+    // 🔥 SAFETY CHECK: Only reassign if still pending
+if (incident.driverStatus !== 'pending_acceptance') {
+  console.log(`ℹ️ Incident ${incidentId} no longer pending (status: ${incident.driverStatus}), skipping reassignment`);
+  return;
+}
+    // Track all drivers who've rejected this incident
+    const previouslyRejected = Array.isArray(incident.rejectedDrivers)
+      ? [...incident.rejectedDrivers, rejectedDriverId.toString()]
+      : [rejectedDriverId.toString()];
+
+    const incidentLat = incident.location?.coordinates?.[1];
+    const incidentLng = incident.location?.coordinates?.[0];
+
+    // Try current department first
+    let nextDriver = await findNextAvailableDriver(
+      departmentName,
+      previouslyRejected,
+      incidentLat,
+      incidentLng
+    );
+
+    let assignedDepartment = departmentName;
+
+    // If no drivers in current department, try other departments
+    if (!nextDriver) {
+      console.log(`⚠️ No drivers left in ${departmentName}, checking other departments...`);
+      
+      // Get all other departments
+      const allDepartments = await User.distinct('department', { 
+        role: 'driver', 
+        status: 'active' 
+      });
+      
+      const otherDepartments = allDepartments.filter(dept => dept !== departmentName);
+      console.log(`📋 Other departments available: ${otherDepartments.join(', ')}`);
+      
+      // Sort by distance to incident (find closest department with available drivers)
+      const departmentsWithDistance = [];
+      
+      for (const dept of otherDepartments) {
+        const deptDrivers = await User.find({
+          role: 'driver',
+          department: dept,
+          status: 'active',
+          _id: { $nin: previouslyRejected }
+        }).select('name location _id department');
+        
+        if (deptDrivers.length > 0) {
+          // Calculate closest driver in this department
+          let minDistance = Infinity;
+          for (const driver of deptDrivers) {
+            if (driver.location?.coordinates?.length >= 2) {
+              const dLat = driver.location.coordinates[1];
+              const dLng = driver.location.coordinates[0];
+              const dist = calculateHaversineDistance(incidentLat, incidentLng, dLat, dLng);
+              if (dist < minDistance) {
+                minDistance = dist;
+              }
+            }
+          }
+          
+          departmentsWithDistance.push({
+            department: dept,
+            distance: minDistance,
+            driverCount: deptDrivers.length
+          });
+        }
+      }
+      
+      // Sort by distance
+      departmentsWithDistance.sort((a, b) => a.distance - b.distance);
+      
+      if (departmentsWithDistance.length > 0) {
+        // Try the closest other department
+        const nextDepartment = departmentsWithDistance[0].department;
+        console.log(`🔄 Trying next closest department: ${nextDepartment}`);
+        
+        nextDriver = await findNextAvailableDriver(
+          nextDepartment,
+          previouslyRejected,
+          incidentLat,
+          incidentLng
+        );
+        
+        if (nextDriver) {
+          assignedDepartment = nextDepartment; // Update department name for assignment
+          console.log(`✅ Found driver ${nextDriver.name} in ${assignedDepartment}`);
+        }
+      }
+    }
+
+    if (nextDriver) {
+      // ── Reassign to next closest driver ──────────────────────────────────
+      incident.assignedTo = {
+        department: assignedDepartment,
+        driver: nextDriver._id,
+        assignedAt: new Date(),
+        assignedBy: incident.assignedTo?.assignedBy,
+        driverName: nextDriver.name
+      };
+      incident.status = 'assigned';
+      incident.departmentStatus = 'assigned';
+      incident.driverStatus = 'pending_acceptance';
+      incident.rejectedDrivers = previouslyRejected;
+
+      incident.actions.push({
+        action: 'auto_reassigned',
+        performedBy: incident.assignedTo?.assignedBy || rejectedDriverId,
+        details: {
+          newDriver: nextDriver._id,
+          newDriverName: nextDriver.name,
+          newDepartment: assignedDepartment,
+          previousDriver: rejectedDriverId,
+          previousDepartment: departmentName,
+          rejectionType,
+          reason: reason || 'Previous driver rejected or timed out'
+        },
+        timestamp: new Date()
+      });
+
+      await incident.save();
+
+      // Populate for emission
+      await incident.populate('reportedBy', 'name email phone');
+      await incident.populate('assignedTo.driver', 'name phone');
+
+      // Create notification for new driver
+      await Notification.create({
+        recipient: nextDriver._id,
+        title: 'New Incident Assigned',
+        message: `You have been assigned to a ${incident.category} incident at ${incident.location?.address}`,
+        type: 'assignment',
+        relatedIncident: incident._id,
+        data: {
+          incidentId: incident._id,
+          action: 'reassignment',
+          department: assignedDepartment
+        }
+      });
+
+      if (io) {
+        // ✅ Notify new driver
+        io.to(`driver_${nextDriver._id}`).emit('incidentAssigned', {
+          incident: incident,
+          eta: null,
+          distance: null,
+          message: `You are the next assigned driver for this ${incident.category} incident`,
+          assignedAt: new Date().toISOString()
+        });
+        console.log(`📡 Reassigned — notified driver_${nextDriver._id} (${nextDriver.name})`);
+
+        // ✅ Notify previous driver their rejection was processed
+        io.to(`driver_${rejectedDriverId}`).emit('rejectionConfirmed', {
+          incidentId: incidentId.toString(),
+          message: 'Your rejection was processed. Incident reassigned.',
+          reassignedTo: nextDriver.name,
+          reassignedToDepartment: assignedDepartment
+        });
+
+        // ✅ Notify original department
+        io.to(`dept_${departmentName}`).emit('driverRejected', {
+          incidentId: incident._id,
+          rejectedDriverName: driverName || 'Driver',
+          reason: reason || rejectionType,
+          reassignedTo: nextDriver.name,
+          reassignedToDepartment: assignedDepartment,
+          message: `Incident reassigned to ${nextDriver.name} (${assignedDepartment}) after rejection`,
+        });
+
+        // ✅ Notify new department
+        io.to(`dept_${assignedDepartment}`).emit('incidentAssigned', {
+          incidentId: incident._id,
+          driverName: nextDriver.name,
+          message: `New incident assigned to your department (reassigned from ${departmentName})`,
+        });
+
+        // ✅ Notify all departments to refresh
+        io.to('departments').emit('incidentUpdated', incident);
+        io.to('admins').emit('incidentUpdated', incident);
+
+        // ✅ Start new 2-minute timer for the new driver
+        rejectionTimerService.startTimer(
+          incident._id.toString(),
+          nextDriver._id.toString(),
+          assignedDepartment,
+          async (iId, tDriverId, dept) => {
+            console.log(`🔄 New driver ${tDriverId} timed out, reassigning again...`);
+            await _performReassignment(iId, tDriverId, dept, 'timeout', io);
+          }
+        );
+      }
+
+      console.log(`✅ Incident ${incidentId} reassigned to ${nextDriver.name} (${assignedDepartment}) [${rejectionType}]`);
+
+      return {
+        success: true,
+        data: incident,
+        message: `Incident reassigned to ${nextDriver.name} (${assignedDepartment})`,
+        reassigned: true,
+        newDriver: nextDriver.name,
+        newDepartment: assignedDepartment,
+        rejectionType,
+        rejectedCount: previouslyRejected.length,
+      };
+
+    } else {
+      // ── No more drivers ANYWHERE — return incident to admin pool ──────────────
+      incident.assignedTo = {
+        assignedAt: new Date(),
+        assignedBy: incident.assignedTo?.assignedBy
+      };
+      incident.status = 'approved'; // Back to approved for admin to reassign
+      incident.driverStatus = undefined;
+      incident.departmentStatus = undefined;
+      incident.rejectedDrivers = previouslyRejected;
+
+      incident.actions.push({
+        action: 'returned_to_admin',
+        details: {
+          reason: 'All drivers across all departments rejected or timed out',
+          rejectedCount: previouslyRejected.length,
+          lastDepartment: departmentName
+        },
+        timestamp: new Date()
+      });
+
+      await incident.save();
+
+      if (io) {
+        // Notify all departments that incident is back in admin queue
+        io.to('departments').emit('incidentReturnedToAdmin', {
+          incidentId: incident._id,
+          message: 'No drivers available across departments. Incident returned to admin queue.',
+        });
+
+        // Notify admins
+        io.to('admins').emit('incidentUpdated', incident);
+      }
+
+      console.log(`⚠️ No drivers available anywhere — incident ${incidentId} returned to admin pool`);
+
+      return {
+        success: true,
+        data: incident,
+        message: 'No drivers available. Incident returned to admin queue.',
+        reassigned: false,
+        rejectedCount: previouslyRejected.length,
+      };
+    }
+  } catch (error) {
+    console.error('❌ Error in _performReassignment:', error);
+    return { success: false, message: error.message };
+  }
+}
+
+// Helper function to find next available driver in a department
+async function findNextAvailableDriver(departmentName, rejectedDriverIds, incidentLat, incidentLng) {
+  const User = require('../models/User');
+
+  console.log(`🔍 Finding next available driver in ${departmentName}, excluding ${rejectedDriverIds.length} rejected drivers`);
+
+  // Get all active drivers in this department, excluding already-rejected ones
+  const candidates = await User.find({
+    role: 'driver',
+    department: departmentName,
+    status: 'active',
+    _id: { $nin: rejectedDriverIds },
+  }).select('name phone location _id department');
+
+  if (candidates.length === 0) {
+    console.log(`⚠️ No more drivers available in ${departmentName}`);
+    return null;
+  }
+
+  console.log(`📊 Found ${candidates.length} candidate drivers in ${departmentName}`);
+
+  // Sort by distance to incident if we have coordinates
+  if (incidentLat != null && incidentLng != null && !isNaN(incidentLat) && !isNaN(incidentLng)) {
+    const withDistance = candidates
+      .filter(d => d.location?.coordinates?.length >= 2)
+      .map(d => {
+        const dLat = d.location.coordinates[1];
+        const dLng = d.location.coordinates[0];
+        const dist = calculateHaversineDistance(incidentLat, incidentLng, dLat, dLng);
+        return { driver: d, distance: dist };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    if (withDistance.length > 0) {
+      console.log(`🚗 Next closest driver: ${withDistance[0].driver.name} (${withDistance[0].distance.toFixed(2)} km)`);
+      return withDistance[0].driver;
+    }
+  }
+
+  // Fallback: return first available
+  console.log(`🚗 No location data, picking first available: ${candidates[0].name}`);
+  return candidates[0];
+}
+
+// Helper function to calculate Haversine distance
+function calculateHaversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371; // Earth's radius in km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 // @desc    Get incidents for driver - UPDATED VERSION
 // @route   GET /api/incidents/driver/my-incidents
 // @access  Private (Driver)
+// ─── 1. FIX: getDriverIncidents() — standalone function, no baseFilter ────────
 exports.getDriverIncidents = async (req, res, next) => {
   try {
     console.log('🚗 Driver incidents request received for driver:', {
       id: req.user.id,
-      userId: req.user.userId,
       name: req.user.name,
       role: req.user.role
     });
 
-    // Check if this is a super admin trying to view driver incidents
-    const isSuperAdminViewingDriver = req.user.role === 'superadmin' && 
-      (req.query.driverId || req.query.viewAsDriver === 'true');
-
     let driverId;
-    
-    if (isSuperAdminViewingDriver) {
-      // Super admin can view any driver's incidents
-      driverId = req.query.driverId || req.user.id;
-      console.log(`👑 Super Admin viewing incidents for driver: ${driverId}`);
-    } else if (req.user.role === 'driver') {
-      // Normal driver can only view their own incidents
+    try {
+      driverId = mongoose.Types.ObjectId.isValid(req.user.id)
+        ? new mongoose.Types.ObjectId(req.user.id)
+        : req.user.id;
+    } catch (err) {
       driverId = req.user.id;
-    } else {
-      return res.status(403).json({
-        success: false,
-        message: 'Only drivers or super admins can view driver incidents'
-      });
     }
 
-    console.log(`🔍 Looking for incidents assigned to driver ID: ${driverId}`);
-
-    // Enhanced query with better ObjectId handling
+    // ✅ Include pending_acceptance + active + completed
     const incidents = await Incident.find({
       'assignedTo.driver': driverId,
-      status: { $in: ['assigned', 'in_progress', 'completed'] }
+      $or: [
+        { driverStatus: 'pending_acceptance' },
+        { status: { $in: ['assigned', 'in_progress', 'completed'] } }
+      ]
     })
     .populate('reportedBy', 'name email phone')
     .populate('assignedTo.driver', 'name phone department')
     .populate('actions.performedBy', 'name role')
     .sort('-createdAt');
 
-    console.log(`✅ Found ${incidents.length} incidents for driver ${driverId}`);
-    
-    // Debug: Log each incident details
-    incidents.forEach(incident => {
-      console.log(`📋 Incident ${incident._id}:`, {
-        status: incident.status,
-        driverStatus: incident.driverStatus,
-        assignedDriver: incident.assignedTo?.driver?._id || incident.assignedTo?.driver,
-        driverName: incident.assignedTo?.driver?.name,
-        department: incident.assignedTo?.department
-      });
-    });
+    console.log(`✅ Found ${incidents.length} incidents for driver ${req.user.id}`);
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       count: incidents.length,
-      driverId: driverId,
-      isSuperAdmin: req.user.role === 'superadmin',
+      driverId: req.user.id,
       data: incidents
     });
+
   } catch (error) {
     console.error('❌ Error getting driver incidents:', error);
     next(error);
   }
 };
 
+async function findNextAvailableDriver(departmentName, rejectedDriverIds, incidentLat, incidentLng) {
+  const User = require('../models/User');
+
+  // Get all active drivers in this department, excluding already-rejected ones
+  const candidates = await User.find({
+    role: 'driver',
+    department: departmentName,
+    status: 'active',
+    _id: { $nin: rejectedDriverIds },
+  }).select('name phone location _id department');
+
+  if (candidates.length === 0) {
+    console.log(`⚠️ No more drivers available in ${departmentName}`);
+    return null;
+  }
+
+  // Sort by distance to incident if we have coordinates
+  if (incidentLat != null && incidentLng != null) {
+    const withDistance = candidates
+      .filter(d => d.location?.coordinates?.length >= 2)
+      .map(d => {
+        const dLat = d.location.coordinates[1];
+        const dLng = d.location.coordinates[0];
+        const dist = calculateHaversineDistance(incidentLat, incidentLng, dLat, dLng);
+        return { driver: d, distance: dist };
+      })
+      .sort((a, b) => a.distance - b.distance);
+
+    if (withDistance.length > 0) {
+      console.log(`🚗 Next closest driver: ${withDistance[0].driver.name} (${withDistance[0].distance.toFixed(2)} km)`);
+      return withDistance[0].driver;
+    }
+  }
+
+  // Fallback: return first available
+  console.log(`🚗 No location data, picking first available: ${candidates[0].name}`);
+  return candidates[0];
+}
+
+function calculateHaversineDistance(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// ─── UPDATED: assignDriver — starts 2-min timer after assignment ─────────────
+exports.assignDriver = async (req, res, next) => {
+  try {
+    const { driverId } = req.body;
+    const rejectionTimerService = require('../services/rejectiontimer');
+
+    const incident = await Incident.findOneAndUpdate(
+      {
+        _id: req.params.id,
+        $or: [
+          { 'assignedTo.driver': { $exists: false } },
+          { 'assignedTo.driver': null }
+        ]
+      },
+      {
+        $set: {
+          'assignedTo.claimedAt': new Date(),
+          'assignedTo.department': req.user.department
+        }
+      },
+      { new: false }
+    );
+
+    if (!incident) {
+      const takenIncident = await Incident.findById(req.params.id).populate('assignedTo.driver', 'name');
+      return res.status(409).json({
+        success: false,
+        message: `Incident already claimed by ${takenIncident?.assignedTo?.department}`,
+        takenBy: takenIncident?.assignedTo?.department
+      });
+    }
+
+    const driver = await User.findById(driverId);
+    if (!driver || driver.role !== 'driver') {
+      return res.status(400).json({ success: false, message: 'Invalid driver ID' });
+    }
+
+    // Initialize rejectedDrivers array if not present
+    if (!incident.rejectedDrivers) incident.rejectedDrivers = [];
+
+    incident.assignedTo = {
+      department: req.user.department,
+      driver: driverId,
+      assignedAt: new Date(),
+      assignedBy: req.user.id,
+      driverName: driver.name
+    };
+
+    incident.status = 'assigned';
+    incident.departmentStatus = 'assigned';
+    incident.driverStatus = 'pending_acceptance';
+
+    incident.actions.push({
+      action: 'driver_assigned',
+      performedBy: req.user.id,
+      details: {
+        driver: driverId,
+        driverName: driver.name,
+        department: req.user.department
+      },
+      timestamp: new Date()
+    });
+
+    await incident.save();
+    await incident.populate('reportedBy', 'name email phone');
+    await incident.populate('assignedTo.driver', 'name phone department');
+
+    await Notification.create({
+      recipient: driverId,
+      title: 'New Incident Assigned',
+      message: `You have been assigned to a ${incident.category} incident at ${incident.location?.address}`,
+      type: 'assignment',
+      relatedIncident: incident._id
+    });
+
+    if (req.io) {
+      req.io.to(`driver_${driverId}`).emit('incidentAssigned', {
+        incident: incident,
+        eta: null,
+        distance: null,
+      });
+      console.log(`📡 Emitted incidentAssigned to driver_${driverId}`);
+
+      req.io.to('departments').emit('incidentClaimed', {
+        incidentId: incident._id,
+        claimedBy: req.user.department,
+        driverName: driver.name
+      });
+
+      req.io.to('admins').emit('driverAssigned', { incident, driver });
+    }
+
+    // ✅ Start 2-minute acceptance timer
+    rejectionTimerService.startTimer(
+      incident._id,
+      driverId,
+      req.user.department,
+      async (incidentId, timedOutDriverId, dept, reason) => {
+        // Timer fired — treat as rejection and reassign
+        console.log(`🔄 Auto-reassigning incident ${incidentId} due to ${reason}`);
+        await _performReassignment(incidentId, timedOutDriverId, dept, 'timeout', req.io);
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: incident,
+      message: `Driver ${driver.name} assigned successfully. 2-minute acceptance window started.`
+    });
+
+  } catch (error) {
+    console.error('❌ Error assigning driver:', error);
+    next(error);
+  }
+};
+
+// ─── UPDATED: rejectIncidentDriver — sequential reassignment with 2-min check ─
+exports.rejectIncidentDriver = async (req, res, next) => {
+  try {
+    const incidentId = req.params.id;
+    const driverId = req.user.id;
+    const { reason } = req.body;
+    const rejectionTimerService = require('../services/rejectiontimer');
+
+    console.log(`❌ Driver ${driverId} rejecting incident ${incidentId}`);
+
+    const incident = await Incident.findById(incidentId);
+
+    if (!incident) {
+      return res.status(404).json({ success: false, message: 'Incident not found' });
+    }
+
+    const assignedDriverId = incident.assignedTo?.driver?.toString();
+    if (assignedDriverId !== driverId.toString()) {
+      return res.status(403).json({ success: false, message: 'You are not assigned to this incident' });
+    }
+
+    // ✅ Check if rejection is within 2-minute window
+    const windowCheck = rejectionTimerService.checkRejectionWindow(incidentId, driverId);
+    console.log(`⏱️ Rejection window check:`, windowCheck);
+
+    // Clear the timer — driver responded (with rejection)
+    rejectionTimerService.clearTimer(incidentId);
+
+    // Log the rejection
+    incident.actions.push({
+      action: 'driver_rejected',
+      performedBy: driverId,
+      details: {
+        reason: reason || 'Driver rejected',
+        withinWindow: windowCheck.withinWindow,
+        elapsedMs: windowCheck.elapsedMs,
+      },
+      timestamp: new Date()
+    });
+
+    await incident.save();
+
+    // Perform sequential reassignment
+    const result = await _performReassignment(
+      incidentId,
+      driverId,
+      incident.assignedTo?.department,
+      windowCheck.withinWindow ? 'within_window' : 'outside_window',
+      req.io,
+      req.user.name,
+      reason
+    );
+
+    return res.status(200).json(result);
+
+  } catch (error) {
+    console.error('❌ Error rejecting incident:', error);
+    next(error);
+  }
+};
+
+// ─── SHARED: Perform the actual sequential reassignment ──────────────────────
+// ─── SHARED: Perform the actual sequential reassignment ──────────────────────
+async function _performReassignment(incidentId, rejectedDriverId, departmentName, rejectionType, io, driverName, reason) {
+  try {
+    const rejectionTimerService = require('../services/rejectiontimer');
+    const User = require('../models/User');
+
+    const incident = await Incident.findById(incidentId);
+    if (!incident) {
+      console.log(`❌ Incident ${incidentId} not found for reassignment`);
+      return { success: false, message: 'Incident not found' };
+    }
+
+    // Track all drivers who've rejected this incident
+    const previouslyRejected = Array.isArray(incident.rejectedDrivers)
+      ? [...incident.rejectedDrivers, rejectedDriverId.toString()]
+      : [rejectedDriverId.toString()];
+
+    const incidentLat = incident.location?.coordinates?.[1];
+    const incidentLng = incident.location?.coordinates?.[0];
+
+    // Try current department first
+    let nextDriver = await findNextAvailableDriver(
+      departmentName,
+      previouslyRejected,
+      incidentLat,
+      incidentLng
+    );
+
+    // If no drivers in current department, try other departments
+    if (!nextDriver) {
+      console.log(`⚠️ No drivers left in ${departmentName}, checking other departments...`);
+      
+      // Get all other departments
+      const allDepartments = await User.distinct('department', { 
+        role: 'driver', 
+        status: 'active' 
+      });
+      
+      const otherDepartments = allDepartments.filter(dept => dept !== departmentName);
+      
+      // Sort by distance to incident (find closest department with available drivers)
+      const departmentsWithDistance = [];
+      
+      for (const dept of otherDepartments) {
+        const deptDrivers = await User.find({
+          role: 'driver',
+          department: dept,
+          status: 'active',
+          _id: { $nin: previouslyRejected }
+        }).select('name location _id department');
+        
+        if (deptDrivers.length > 0) {
+          // Calculate closest driver in this department
+          let minDistance = Infinity;
+          for (const driver of deptDrivers) {
+            if (driver.location?.coordinates?.length >= 2) {
+              const dLat = driver.location.coordinates[1];
+              const dLng = driver.location.coordinates[0];
+              const dist = calculateHaversineDistance(incidentLat, incidentLng, dLat, dLng);
+              if (dist < minDistance) {
+                minDistance = dist;
+              }
+            }
+          }
+          
+          departmentsWithDistance.push({
+            department: dept,
+            distance: minDistance,
+            driverCount: deptDrivers.length
+          });
+        }
+      }
+      
+      // Sort by distance
+      departmentsWithDistance.sort((a, b) => a.distance - b.distance);
+      
+      if (departmentsWithDistance.length > 0) {
+        // Try the closest other department
+        const nextDepartment = departmentsWithDistance[0].department;
+        console.log(`🔄 Trying next closest department: ${nextDepartment}`);
+        
+        nextDriver = await findNextAvailableDriver(
+          nextDepartment,
+          previouslyRejected,
+          incidentLat,
+          incidentLng
+        );
+        
+        if (nextDriver) {
+          departmentName = nextDepartment; // Update department name for assignment
+        }
+      }
+    }
+
+    if (nextDriver) {
+      // ── Reassign to next closest driver ──────────────────────────────────
+      incident.assignedTo = {
+        department: departmentName, // This could be a different department now
+        driver: nextDriver._id,
+        assignedAt: new Date(),
+        assignedBy: incident.assignedTo?.assignedBy,
+        driverName: nextDriver.name
+      };
+      incident.status = 'assigned';
+      incident.departmentStatus = 'assigned';
+      incident.driverStatus = 'pending_acceptance';
+      incident.rejectedDrivers = previouslyRejected;
+
+      incident.actions.push({
+        action: 'auto_reassigned',
+        performedBy: incident.assignedTo?.assignedBy || rejectedDriverId,
+        details: {
+          newDriver: nextDriver._id,
+          newDriverName: nextDriver.name,
+          newDepartment: departmentName,
+          previousDriver: rejectedDriverId,
+          previousDepartment: incident.assignedTo?.department,
+          rejectionType,
+          reason: reason || 'Previous driver rejected or timed out'
+        },
+        timestamp: new Date()
+      });
+
+      await incident.save();
+
+      // Populate for emission
+      await incident.populate('reportedBy', 'name email phone');
+      await incident.populate('assignedTo.driver', 'name phone');
+
+      // Create notification for new driver
+      await Notification.create({
+        recipient: nextDriver._id,
+        title: 'New Incident Assigned',
+        message: `You have been assigned to a ${incident.category} incident at ${incident.location?.address}`,
+        type: 'assignment',
+        relatedIncident: incident._id
+      });
+
+      if (io) {
+        // ✅ Notify new driver
+        io.to(`driver_${nextDriver._id}`).emit('incidentAssigned', {
+          incident: incident,
+          eta: null,
+          distance: null,
+          message: `You are the next assigned driver for this ${incident.category} incident`,
+        });
+        console.log(`📡 Reassigned — notified driver_${nextDriver._id} (${nextDriver.name})`);
+
+        // ✅ Notify previous driver their rejection was processed
+        io.to(`driver_${rejectedDriverId}`).emit('rejectionConfirmed', {
+          incidentId: incidentId.toString(),
+          message: 'Your rejection was processed. Incident reassigned.',
+        });
+
+        // ✅ Notify original department
+        io.to(`dept_${incident.assignedTo?.department}`).emit('driverRejected', {
+          incidentId: incident._id,
+          rejectedDriverName: driverName || 'Driver',
+          reason: reason || rejectionType,
+          reassignedTo: nextDriver.name,
+          reassignedToDepartment: departmentName,
+          message: `Incident reassigned to ${nextDriver.name} (${departmentName}) after rejection`,
+        });
+
+        // ✅ Notify department dashboard to refresh
+        io.to('departments').emit('incidentUpdated', incident);
+        io.to('admins').emit('incidentUpdated', incident);
+
+        // ✅ Start new 2-minute timer for the new driver
+        rejectionTimerService.startTimer(
+          incident._id,
+          nextDriver._id,
+          departmentName,
+          async (iId, tDriverId, dept) => {
+            console.log(`🔄 New driver ${tDriverId} timed out, reassigning again...`);
+            await _performReassignment(iId, tDriverId, dept, 'timeout', io);
+          }
+        );
+      }
+
+      console.log(`✅ Incident ${incidentId} reassigned to ${nextDriver.name} (${departmentName}) [${rejectionType}]`);
+
+      return {
+        success: true,
+        data: incident,
+        message: `Incident reassigned to ${nextDriver.name} (${departmentName})`,
+        reassigned: true,
+        newDriver: nextDriver.name,
+        newDepartment: departmentName,
+        rejectionType,
+        rejectedCount: previouslyRejected.length,
+      };
+
+    } else {
+      // ── No more drivers ANYWHERE — return incident to admin pool ──────────────
+      incident.assignedTo = {
+        assignedAt: new Date(),
+        assignedBy: incident.assignedTo?.assignedBy
+      };
+      incident.status = 'approved'; // Back to approved for admin to reassign
+      incident.driverStatus = undefined;
+      incident.departmentStatus = undefined;
+      incident.rejectedDrivers = previouslyRejected;
+
+      incident.actions.push({
+        action: 'returned_to_admin',
+        details: {
+          reason: 'All drivers across all departments rejected or timed out',
+          rejectedCount: previouslyRejected.length,
+          lastDepartment: departmentName
+        },
+        timestamp: new Date()
+      });
+
+      await incident.save();
+
+      if (io) {
+        // Notify all departments that incident is back in admin queue
+        io.to('departments').emit('incidentReturnedToAdmin', {
+          incidentId: incident._id,
+          message: 'No drivers available across departments. Incident returned to admin queue.',
+        });
+
+        // Notify admins
+        io.to('admins').emit('incidentUpdated', incident);
+      }
+
+      console.log(`⚠️ No drivers available anywhere — incident ${incidentId} returned to admin pool`);
+
+      return {
+        success: true,
+        data: incident,
+        message: 'No drivers available. Incident returned to admin queue.',
+        reassigned: false,
+        rejectedCount: previouslyRejected.length,
+      };
+    }
+  } catch (error) {
+    console.error('❌ Error in _performReassignment:', error);
+    return { success: false, message: error.message };
+  }
+}
 // @desc    Get incidents for any driver (Super Admin only)
 // @route   GET /api/admin/driver-incidents/:driverId
 // @access  Private (SuperAdmin)

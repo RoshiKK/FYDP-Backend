@@ -5,26 +5,171 @@ const path = require('path');
 const http = require('http');
 const mongoose = require('mongoose');
 const { GridFSBucket } = require('mongodb');
-
-// ✅ Swagger
+const { Server } = require('socket.io'); // 👈 ADD THIS
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
-
-// Load env FIRST
 dotenv.config();
-
 const PORT = process.env.PORT || 5000;
 
-// Database
 const connectDatabase = require('./config/database');
 connectDatabase();
 
-// Routes
 const uploadRoutes = require('./routes/upload');
 
-// App setup
 const app = express();
-const server = http.createServer(app);
+const server = http.createServer(app); // ✅ already have this
+
+
+// =====================
+// SOCKET.IO SETUP 👈 ADD THIS ENTIRE BLOCK
+// =====================
+const io = new Server(server, {
+  cors: {
+    origin: '*', // tighten this in production
+    methods: ['GET', 'POST']
+  }
+});
+// In server.js, update the socket.io connection handler
+// io.on('connection', (socket) => {
+//   console.log('🔌 Client connected:', socket.id);
+  
+//   // Log all rooms when joining
+//   socket.on('join_admin', (adminId) => {
+//     socket.join('admins');
+//     console.log(`👮 Admin ${adminId} joined admins room`);
+//     console.log(`📊 Current rooms for ${socket.id}:`, Array.from(socket.rooms));
+//   });
+
+//   socket.on('join_department', (departmentName) => {
+//     socket.join('departments');           // generic room — gets ALL approved incidents
+//     socket.join(`dept_${departmentName}`); // specific room — for targeted messages later
+    
+//     console.log(`🏢 Department ${departmentName} joined departments room`);
+//     console.log(`📊 Current rooms for ${socket.id}:`, Array.from(socket.rooms));
+    
+//     // Send confirmation back to client
+//     socket.emit('department_joined', {
+//       success: true,
+//       department: departmentName,
+//       message: 'Successfully joined department room'
+//     });
+//   });
+
+//   // Citizen joins to track their own incident
+//   socket.on('join_citizen', (userId) => {
+//     socket.join(`citizen_${userId}`);
+//     console.log(`👤 Citizen ${userId} joined their room`);
+//   });
+
+//   socket.on('disconnect', () => {
+//     console.log('🔌 Disconnected:', socket.id);
+//   });
+
+//   // Add ping-pong for connection testing
+//   socket.on('ping', (data) => {
+//     console.log('🏓 Ping received from:', socket.id);
+//     socket.emit('pong', { received: data, time: new Date().toISOString() });
+//   });
+// }
+
+
+io.on('connection', (socket) => {
+  console.log('🔌 Client connected:', socket.id);
+  
+  // Admin joins
+  socket.on('join_admin', (adminId) => {
+    socket.join('admins');
+    console.log(`👮 Admin ${adminId} joined admins room`);
+  });
+
+  // Department joins
+  socket.on('join_department', (departmentName) => {
+    socket.join('departments');
+    socket.join(`dept_${departmentName}`);
+    console.log(`🏢 Department ${departmentName} joined departments room`);
+    
+    socket.emit('department_joined', {
+      success: true,
+      department: departmentName,
+      message: 'Successfully joined department room'
+    });
+  });
+
+  // 🔥 NEW: Driver joins their personal room
+  socket.on('join_driver', (driverId) => {
+    socket.join(`driver_${driverId}`);
+    console.log(`🚗 Driver ${driverId} joined their room`);
+    
+    socket.emit('driver_joined', {
+      success: true,
+      driverId: driverId,
+      message: 'Successfully joined driver room'
+    });
+  });
+
+  // Citizen joins
+  socket.on('join_citizen', (userId) => {
+    socket.join(`citizen_${userId}`);
+    console.log(`👤 Citizen ${userId} joined their room`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('🔌 Disconnected:', socket.id);
+  });
+
+  socket.on('ping', (data) => {
+    console.log('🏓 Ping received from:', socket.id);
+    socket.emit('pong', { received: data, time: new Date().toISOString() });
+  });
+});
+// In server.js, after io initialization
+const assignmentQueue = require('./services/assignmentqueue');
+assignmentQueue.initialize(io);
+console.log('✅ Assignment queue initialized with Socket.IO');
+
+
+// Make queue available to routes
+app.use((req, res, next) => {
+  req.assignmentQueue = assignmentQueue;
+  next();
+});
+// Add a debug endpoint to check socket connections
+app.get('/api/socket/debug', (req, res) => {
+  const rooms = io.sockets.adapter.rooms;
+  const sockets = io.sockets.sockets;
+  
+  const debug = {
+    totalConnections: sockets.size,
+    rooms: {}
+  };
+  
+  rooms.forEach((sockets, room) => {
+    if (!room.startsWith('/')) { // Filter out default rooms
+      debug.rooms[room] = sockets.size;
+    }
+  });
+  
+  res.json({
+    success: true,
+    debug
+  });
+});
+  // In server.js socket.on('connection') block, add:
+// socket.on('join_department', (department) => {
+//   socket.join(department); // e.g. 'Edhi Foundation'
+//   console.log(`🏢 Department user joined: ${department}`);
+// });
+
+
+// =====================
+// ATTACH io TO EVERY REQUEST 👈 ADD THIS
+// =====================
+app.use((req, res, next) => {
+  req.io = io;
+  next();
+});
+
+app.use(cors());
 
 // =====================
 // CORS CONFIG
@@ -32,6 +177,7 @@ const server = http.createServer(app);
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:5173',
+  'http://localhost:5000', // 👈 ADD THIS
   'http://10.0.2.2:5000',
   'capacitor://localhost',
   'ionic://localhost',
@@ -54,8 +200,8 @@ const corsOptions = {
   allowedHeaders: ['Content-Type','Authorization']
 };
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// app.use(cors(corsOptions));
+// app.options('*', cors(corsOptions));
 
 // =====================
 // MIDDLEWARE

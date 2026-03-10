@@ -360,6 +360,8 @@ const {
   updateIncident,
   deleteIncident,
   approveIncident,
+  rejectIncidentDriver,   // 👈 new name
+  acceptIncident,  
   rejectIncident,
   assignDriver,
   getNearbyIncidents,
@@ -644,5 +646,6 @@ router.put('/:id/approve', protect, authorize('admin', 'superadmin'), approveInc
 router.put('/:id/reject', protect, authorize('admin', 'superadmin'), rejectIncident);
 router.put('/:id/assign', protect, authorize('department', 'admin', 'superadmin'), assignDriver);
 router.put('/:id/status', protect, updateIncidentStatus);
-
+router.put('/:id/accept', protect, authorize('driver'), acceptIncident);
+router.put('/:id/reject-driver', protect, rejectIncidentDriver);  // 👈 different path too
 module.exports = router;

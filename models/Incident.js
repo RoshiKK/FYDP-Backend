@@ -161,10 +161,17 @@ const incidentSchema = new mongoose.Schema({
   },
 
   // DRIVER WORKFLOW STATUS
-  driverStatus: {
+   driverStatus: {
     type: String,
-    enum: ['assigned', 'arrived', 'transporting', 'delivered', 'completed'],
+    enum: ['assigned', 'arrived', 'transporting', 'delivered', 'completed', 'pending_acceptance', 'accepted', 'rejected'],
     default: 'assigned'
+  },
+  
+  // Optional: Add this field to track acceptance separately
+  acceptanceStatus: {
+    type: String,
+    enum: ['pending', 'accepted', 'rejected', 'expired'],
+    default: 'pending'
   },
 
   // HOSPITAL WORKFLOW STATUS
