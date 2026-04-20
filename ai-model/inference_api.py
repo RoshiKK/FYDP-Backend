@@ -14,25 +14,27 @@ from model_utils import AccidentDetector
 app = Flask(__name__)
 CORS(app)  # Allow mobile app to call this API
 
-# Initialize detector
-detector = AccidentDetector('accident_detector.pt', 'data.yaml')
+# Global detector variable (lazy loaded)
+detector = None
+
+def get_detector():
+    global detector
+    if detector is None:
+        print("📥 Loading AI Model for the first time...")
+        detector = AccidentDetector('accident_detector.pt', 'data.yaml')
+    return detector
 
 print("="*60)
-print("🚀 KHIVISION API Server Starting...")
-print("="*60)
-print(f"   Classes: {detector.class_names}")
-print(f"   Thresholds: {detector.thresholds}")
-print(f"   Severity Weights: {detector.severity_weights}")
+print("🚀 KHIVISION API Server Starting (Lazy Mode Ready)")
 print("="*60)
 
 @app.route('/health', methods=['GET'])
 def health_check():
-    """Health check endpoint"""
+    """Health check endpoint - returns immediately"""
     return jsonify({
         'status': 'healthy',
-        'model_loaded': True,
-        'classes': detector.class_names,
-        'thresholds': detector.thresholds
+        'lazy_loaded': True,
+        'model_status': 'ready' if detector is not None else 'loading_on_demand'
     })
 
 @app.route('/detect', methods=['POST'])
@@ -50,7 +52,7 @@ def detect_accident():
             if not image_data:
                 return jsonify({'error': 'No image data provided'}), 400
             
-            result = detector.detect_from_base64(image_data)
+            result = get_detector().detect_from_base64(image_data)
             return jsonify(result)
         
         # Case 2: File upload
@@ -63,7 +65,7 @@ def detect_accident():
             if img is None:
                 return jsonify({'error': 'Invalid image file'}), 400
             
-            result = detector.detect_accident(img)
+            result = get_detector().detect_accident(img)
             return jsonify(result)
         
         else:
@@ -90,14 +92,14 @@ def detect_with_annotation():
             return jsonify({'error': 'Invalid image'}), 400
         
         # Get annotated image
-        annotated = detector.get_annotated_image(img)
+        annotated = get_detector().get_annotated_image(img)
         
         # Convert to base64
         _, buffer = cv2.imencode('.jpg', annotated)
         img_base64 = base64.b64encode(buffer).decode('utf-8')
         
         # Also get detection results
-        detection_result = detector.detect_accident(img)
+        detection_result = get_detector().detect_accident(img)
         
         return jsonify({
             'annotated_image': img_base64,
@@ -110,7 +112,7 @@ def detect_with_annotation():
 @app.route('/config', methods=['GET'])
 def get_config():
     """Get model configuration"""
-    return jsonify(detector.get_config())
+    return jsonify(get_detector().get_config())
 
 @app.route('/test', methods=['GET'])
 def test_endpoint():
