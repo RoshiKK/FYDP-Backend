@@ -15,10 +15,18 @@ const notificationSchema = new mongoose.Schema({
     required: true
   },
   type: {
-    type: String,
-    enum: ['incident_alert', 'assignment', 'status_update', 'system', 'emergency'],
-    required: true
-  },
+  type: String,
+  enum: [
+    'incident_alert',
+    'assignment',
+    'status_update',
+    'system',
+    'emergency',
+    'hospital_request',   // 👈 ADD
+    'hospital_response'   // 👈 ADD
+  ],
+  required: true
+},
   relatedIncident: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Incident'

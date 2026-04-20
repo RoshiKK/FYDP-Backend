@@ -350,6 +350,7 @@
 const express = require('express');
 const { protect, authorize } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { uploadMiddleware: gridfsUpload } = require('../middleware/gridfsUpload');
 const { apiLimiter, geocodingLimiter } = require('../middleware/rateLimit');
 
 // Import controllers
@@ -360,6 +361,8 @@ const {
   updateIncident,
   deleteIncident,
   approveIncident,
+  rejectIncidentDriver,   // 👈 new name
+  acceptIncident,  
   rejectIncident,
   assignDriver,
   getNearbyIncidents,
@@ -384,6 +387,11 @@ const {
   getHospitalDashboard,
   getDriverIncidentsForSuperAdmin, 
   updatePatientPickupStatus,  // This one is missing from exports
+  getNearestHospitals,
+  createDirectEmergency,
+  requestHospitalAssignment,      // 👈 ADD THIS
+  respondToHospitalRequest,       // 👈 ADD THIS
+  getPendingHospitalRequests      // 👈 ADD THIS
 } = require('../controllers/incidents');
 
 const router = express.Router();
@@ -396,12 +404,16 @@ router.use(apiLimiter);
 
 router.route('/')
   .get(protect, getIncidents)
-  .post(protect, geocodingLimiter, upload.array('photos', 5), createIncident);
+  .post(protect, geocodingLimiter, gridfsUpload, createIncident);
+
+router.post('/direct-emergency', protect, authorize('department'), createDirectEmergency);
 
 router.route('/stats')
   .get(protect, getIncidentStats);
 
-
+// ── Nearest hospitals (for driver "enable hospital route" feature) ─────────────
+router.get('/nearest-hospitals',    protect, authorize('driver'), getNearestHospitals);
+ 
 router.route('/nearby')
   .get(protect, getNearbyIncidents);
 router.put('/fix-hospital-status', protect, authorize('hospital', 'admin'), fixHospitalStatus);
@@ -422,6 +434,11 @@ router.get('/admin/driver-incidents/:driverId', protect, authorize('superadmin')
 router.put('/:id/driver-status', protect, authorize('driver'), updateDriverStatus);
 router.get('/driver/status/:status', protect, authorize('driver'), getIncidentsByDriverStatus);
 router.get('/driver/workflow', protect, authorize('driver'), getDriverWorkflowDashboard);
+
+// Hospital request routes
+router.post('/:id/request-hospital', protect, authorize('driver'), requestHospitalAssignment);
+router.put('/:id/hospital-response', protect, authorize('hospital'), respondToHospitalRequest);
+router.get('/hospital/pending-requests', protect, authorize('hospital'), getPendingHospitalRequests);
 
 // Hospital workflow routes  
 router.put('/:id/hospital-status', protect, authorize('hospital'), updateHospitalStatus);
@@ -644,5 +661,6 @@ router.put('/:id/approve', protect, authorize('admin', 'superadmin'), approveInc
 router.put('/:id/reject', protect, authorize('admin', 'superadmin'), rejectIncident);
 router.put('/:id/assign', protect, authorize('department', 'admin', 'superadmin'), assignDriver);
 router.put('/:id/status', protect, updateIncidentStatus);
-
+router.put('/:id/accept', protect, authorize('driver'), acceptIncident);
+router.put('/:id/reject-driver', protect, rejectIncidentDriver);  // 👈 different path too
 module.exports = router;

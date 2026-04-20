@@ -1,0 +1,17 @@
+names:
+- car_collidedwith_obstacle
+- car_rollover
+- car_with_car
+- car_with_motorcycle
+- motorcycle_crash
+- non_accident
+nc: 6
+roboflow:
+  license: CC BY 4.0
+  project: accident-detection-ojkrp-6uk2i
+  url: https://app.roboflow.com/fyp-darlc/accident-detection-ojkrp-6uk2i/3
+  version: 3
+  workspace: fyp-darlc
+test: test/images
+train: train/images
+val: valid/images

@@ -41,7 +41,8 @@ const {
   getAdminDashboard,
   getDepartmentDashboard,
   getDriverDashboard,
-  getHospitalDashboard
+  getHospitalDashboard,
+  getHistoricalAnalytics
 } = require('../controllers/dashboard');
 
 const router = express.Router();
@@ -50,6 +51,7 @@ router.use(protect);
 
 router.get('/stats', getDashboardStats);
 router.get('/admin', getAdminDashboard);
+router.get('/analytics', getHistoricalAnalytics);
 router.get('/department', getDepartmentDashboard);
 router.get('/driver', getDriverDashboard);
 router.get('/hospital', getHospitalDashboard);

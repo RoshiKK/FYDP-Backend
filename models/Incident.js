@@ -115,17 +115,41 @@ const incidentSchema = new mongoose.Schema({
 
   category: {
     type: String,
-    enum: ['Accident'],
+    enum: ['Accident', 'Emergency', 'Fire'],
     required: true,
-    default: 'Accident'
+    default: 'Emergency'
   },
 
   priority: {
     type: String,
-    enum: ['low', 'medium', 'high', 'urgent'],
+    enum: ['low', 'medium', 'high', 'urgent', 'critical'],
     default: 'high'
   },
 
+
+  hospitalRequest: {
+    hospitalId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    hospitalName: String,
+    requestedAt: Date,
+    status: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected'],
+      default: 'pending'
+    },
+    eta: Number,
+    distance: Number,
+    driverId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    driverName: String,
+    patientCondition: String,
+    respondedAt: Date,
+    responseReason: String
+  },
   location: {
     type: {
       type: String,
@@ -142,6 +166,8 @@ const incidentSchema = new mongoose.Schema({
     }
   },
 
+
+
   photos: [{
     filename: String,  // GridFS filename
     originalName: String,
@@ -156,15 +182,22 @@ const incidentSchema = new mongoose.Schema({
   // MAIN STATUS - Overall incident status
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'assigned', 'in_progress', 'completed', 'cancelled'],
+    enum: ['pending', 'approved', 'rejected', 'assigned', 'in_progress', 'completed', 'cancelled', 'verification_needed'],
     default: 'pending'
   },
 
   // DRIVER WORKFLOW STATUS
-  driverStatus: {
+   driverStatus: {
     type: String,
-    enum: ['assigned', 'arrived', 'transporting', 'delivered', 'completed'],
+    enum: ['assigned', 'arrived', 'transporting', 'delivered', 'completed', 'pending_acceptance', 'accepted', 'rejected'],
     default: 'assigned'
+  },
+  
+  // Optional: Add this field to track acceptance separately
+  acceptanceStatus: {
+    type: String,
+    enum: ['pending', 'accepted', 'rejected', 'expired'],
+    default: 'pending'
   },
 
   // HOSPITAL WORKFLOW STATUS
@@ -178,6 +211,20 @@ const incidentSchema = new mongoose.Schema({
     type: Number,
     min: 0,
     max: 100
+  },
+
+  aiDetectionStatus: {
+    type: String,
+    enum: ['LOW_CONFIDENCE', 'POSSIBLE_ACCIDENT', 'ACCIDENT_CONFIRMED', 'HIGH_ALERT', 'CRITICAL_EMERGENCY', 'NO_ACCIDENT']
+  },
+
+  aiDetectionDetails: {
+    type: Object
+  },
+
+  verificationNeeded: {
+    type: Boolean,
+    default: false
   },
 
   assignedTo: {

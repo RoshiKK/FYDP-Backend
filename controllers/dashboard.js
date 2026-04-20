@@ -35,6 +35,142 @@ exports.getDashboardStats = async (req, res, next) => {
   }
 };
 
+// @desc    Get historical analytics for charts
+// @route   GET /api/dashboard/analytics
+// @access  Private (Admin/SuperAdmin)
+exports.getHistoricalAnalytics = async (req, res, next) => {
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const [
+      volumeTrend,
+      categoryStats,
+      statusStats,
+      efficiencyStats,
+      userMetrics,
+      departmentVolume,
+      priorityStats
+    ] = await Promise.all([
+      // 1. Incident Volume Trend (Last 30 Days)
+      Incident.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: thirtyDaysAgo }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              $dateToString: { format: "%Y-%m-%d", date: "$createdAt" }
+            },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { "_id": 1 } }
+      ]),
+
+      // 2. Category Distribution (All Time)
+      Incident.aggregate([
+        {
+          $group: {
+            _id: "$category",
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+
+      // 3. Status Distribution (All Time)
+      Incident.aggregate([
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+
+      // 4. Efficiency Metrics (Avg Time to Close)
+      Incident.aggregate([
+        {
+          $match: {
+            status: "completed",
+            "timestamps.completedAt": { $exists: true },
+            "timestamps.reportedAt": { $exists: true }
+          }
+        },
+        {
+          $project: {
+            category: 1,
+            responseTime: {
+              $divide: [
+                { $subtract: ["$timestamps.completedAt", "$timestamps.reportedAt"] },
+                60000 // Convert ms to minutes
+              ]
+            }
+          }
+        },
+        {
+          $group: {
+            _id: "$category",
+            avgTime: { $avg: "$responseTime" }
+          }
+        }
+      ]),
+
+      // 5. User & Driver Metrics
+      User.aggregate([
+        {
+          $facet: {
+            roles: [
+              { $group: { _id: "$role", count: { $sum: 1 } } }
+            ],
+            statuses: [
+              { $group: { _id: "$status", count: { $sum: 1 } } }
+            ]
+          }
+        }
+      ]),
+
+      // 6. Department Workload
+      Incident.aggregate([
+        {
+          $group: {
+            _id: "$assignedTo.department",
+            count: { $sum: 1 }
+          }
+        },
+        { $match: { _id: { $ne: null } } }
+      ]),
+
+      // 7. Priority Breakdown
+      Incident.aggregate([
+        {
+          $group: {
+            _id: "$priority",
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        volumeTrend,
+        categoryStats,
+        statusStats,
+        efficiencyStats,
+        userMetrics,
+        departmentVolume,
+        priorityStats
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Get admin dashboard data
 // @route   GET /api/dashboard/admin
 // @access  Private (Admin/SuperAdmin)
@@ -46,17 +182,17 @@ exports.getAdminDashboard = async (req, res, next) => {
       userStats,
       categoryStats
     ] = await Promise.all([
-      // Pending incidents
-      Incident.find({ status: 'pending' })
+      // Reviewable incidents (Pending OR Auto-Rejected)
+      Incident.find({ status: { $in: ['pending', 'rejected', 'verification_needed'] } })
         .populate('reportedBy', 'name email phone')
         .sort('-createdAt')
         .limit(10),
       
-      // Recent incidents
+      // Recent incidents (all)
       Incident.find()
         .populate('reportedBy', 'name email phone')
         .sort('-createdAt')
-        .limit(5),
+        .limit(10),
       
       // User statistics
       User.aggregate([
@@ -92,7 +228,10 @@ exports.getAdminDashboard = async (req, res, next) => {
             $sum: { $cond: [{ $eq: ['$status', 'pending'] }, 1, 0] }
           },
           approved: {
-            $sum: { $cond: [{ $eq: ['$status', 'approved'] }, 1, 0] }
+            $sum: { $cond: [{ $in: ['$status', ['approved', 'assigned', 'in_progress']] }, 1, 0] }
+          },
+          rejected: {
+            $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] }
           },
           completed: {
             $sum: { $cond: [{ $eq: ['$status', 'completed'] }, 1, 0] }
@@ -123,33 +262,34 @@ exports.getAdminDashboard = async (req, res, next) => {
 // @access  Private (Department)
 exports.getDepartmentDashboard = async (req, res, next) => {
   try {
-    const department = req.user.department;
+    const departmentName = req.user.department;
+    // Create a flexible regex for department matching
+    const deptRegex = new RegExp(`^${departmentName}$`, 'i');
 
     const [
       activeIncidents,
-      availableDrivers,
+      allDrivers,
       departmentStats,
       recentAssignments
     ] = await Promise.all([
       // Active incidents for department
       Incident.find({ 
-        'assignedTo.department': department,
-        status: { $in: ['assigned', 'in_progress'] }
+        'assignedTo.department': deptRegex,
+        status: { $in: ['assigned', 'in_progress', 'arrived', 'transporting', 'delivered'] }
       })
         .populate('reportedBy', 'name phone')
         .populate('assignedTo.driver', 'name phone')
         .sort('-createdAt'),
       
-      // Available drivers
+      // All drivers in department
       User.find({ 
         role: 'driver',
-        department: department,
-        status: 'active'
-      }).select('name phone currentLocation'),
+        department: deptRegex
+      }).select('name phone status location'),
       
       // Department statistics
       Incident.aggregate([
-        { $match: { 'assignedTo.department': department } },
+        { $match: { 'assignedTo.department': deptRegex } },
         {
           $group: {
             _id: '$status',
@@ -159,19 +299,45 @@ exports.getDepartmentDashboard = async (req, res, next) => {
       ]),
       
       // Recent assignments
-      Incident.find({ 'assignedTo.department': department })
+      Incident.find({ 'assignedTo.department': deptRegex })
         .populate('assignedTo.driver', 'name')
         .sort('-assignedTo.assignedAt')
         .limit(5)
     ]);
 
+    // Calculate real-time driver availability
+    const driversWithStatus = allDrivers.map(driver => {
+      const driverObj = driver.toObject();
+      
+      // Check if driver is assigned to any ACTIVE incident
+      const isActive = activeIncidents.some(inc => 
+        inc.assignedTo && 
+        inc.assignedTo.driver && 
+        inc.assignedTo.driver._id.toString() === driver._id.toString()
+      );
+
+      if (driver.status !== 'active') {
+        driverObj.calculatedStatus = 'OFFLINE';
+      } else if (isActive) {
+        driverObj.calculatedStatus = 'BUSY';
+      } else {
+        driverObj.calculatedStatus = 'AVAILABLE';
+      }
+
+      return driverObj;
+    });
+
+    // Get summary statistics for the dashboard
+    const summaryStats = await getDepartmentStats(departmentName);
+
     res.status(200).json({
       success: true,
       data: {
         activeIncidents,
-        availableDrivers,
+        availableDrivers: driversWithStatus, 
         departmentStats,
-        recentAssignments
+        recentAssignments,
+        summary: summaryStats
       }
     });
   } catch (error) {
@@ -338,11 +504,13 @@ async function getSuperAdminStats() {
 async function getAdminStats() {
   const [
     pendingApprovals,
+    rejectedReports,
     totalIncidents,
     resolvedIncidents,
     duplicateIncidents
   ] = await Promise.all([
     Incident.countDocuments({ status: 'pending' }),
+    Incident.countDocuments({ status: 'rejected' }),
     Incident.countDocuments(),
     Incident.countDocuments({ status: 'completed' }),
     Incident.countDocuments({ duplicateIncidents: { $exists: true, $ne: [] } })
@@ -350,6 +518,7 @@ async function getAdminStats() {
 
   return {
     pendingApprovals,
+    rejectedReports,
     totalIncidents,
     resolvedIncidents,
     duplicateIncidents,

@@ -87,7 +87,7 @@ const createDefaultUsers = async () => {
     department: 'Chippa Ambulance',
     status: 'active'
   },
-  {
+ {
     name: 'Edhi Driver',
     email: 'driver@irs.com',
     phone: '+923001234571',
@@ -97,9 +97,13 @@ const createDefaultUsers = async () => {
     department: 'Edhi Foundation',
     ambulanceService: 'Edhi Foundation',
     drivingLicense: 'DL-123456',
-    status: 'active'
-  },
-  {
+    status: 'active',
+    location: {
+      type: 'Point',
+      coordinates: [67.0822, 24.9056],
+      address: 'Gulshan-e-Iqbal, Karachi'
+    }},
+{
     name: 'Chippa Driver',
     email: 'driver2@irs.com',
     phone: '+923001234572',
@@ -109,7 +113,12 @@ const createDefaultUsers = async () => {
     department: 'Chippa Ambulance',
     ambulanceService: 'Chippa Ambulance',
     drivingLicense: 'DL-123457',
-    status: 'active'
+    status: 'active',
+    location: {
+      type: 'Point',
+      coordinates: [67.0845, 24.8655],
+      address: 'Shahrah-e-Faisal, Karachi'
+    }
   },
   {
     name: 'Jinnah Hospital',
@@ -186,7 +195,12 @@ const createDefaultUsers = async () => {
         console.log(`✅ Created user: ${userData.email} (${userData.role})`);
       } else {
         console.log(`⚠️ User already exists: ${userData.email} (${userData.role})`);
-        
+        // Update location if provided
+  if (userData.location) {
+    existingUser.location = userData.location;
+    console.log(`📍 Updating location for: ${userData.email}`);
+  }
+
         // FIXED: Check if password needs reset using direct bcrypt comparison
         try {
           if (existingUser.password) {

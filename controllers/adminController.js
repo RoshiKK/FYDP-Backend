@@ -14,6 +14,8 @@ exports.getAdminDashboard = async (req, res, next) => {
       pendingIncidents,
       approvedIncidents,
       completedIncidents,
+      rejectedIncidents,
+      verificationNeededCount,
       recentIncidents,
       userStats,
       categoryStats,
@@ -22,20 +24,24 @@ exports.getAdminDashboard = async (req, res, next) => {
       // Total incidents
       Incident.countDocuments(),
       
-      // Pending incidents
-      Incident.countDocuments({ status: 'pending' }),
-      
-      // Approved incidents
-      Incident.countDocuments({ status: 'approved' }),
-      
-      // Completed incidents
+      // Status-specific counts
+      Incident.countDocuments({ 
+        $or: [
+          { status: 'pending' },
+          { status: 'rejected', verificationNeeded: true },
+          { status: 'verification_needed' }
+        ]
+      }),
+      Incident.countDocuments({ status: { $in: ['approved', 'assigned', 'in_progress'] } }),
       Incident.countDocuments({ status: 'completed' }),
+      Incident.countDocuments({ status: 'rejected', verificationNeeded: { $ne: true } }),
+      Incident.countDocuments({ verificationNeeded: true }),
       
-      // Recent incidents (last 10)
+      // Recent incidents (last 15)
       Incident.find()
         .populate('reportedBy', 'name email phone')
         .sort('-createdAt')
-        .limit(10),
+        .limit(15),
       
       // User statistics by role
       User.aggregate([
@@ -106,6 +112,8 @@ exports.getAdminDashboard = async (req, res, next) => {
           pendingIncidents,
           approvedIncidents,
           completedIncidents,
+          rejectedIncidents,
+          needsVerification: verificationNeededCount,
           avgResponseTime: responseTimeStats[0]?.avgResponseTime || 0
         },
         recentIncidents,
@@ -244,7 +252,12 @@ exports.bulkIncidentActions = async (req, res, next) => {
     // Update incidents
     const result = await Incident.updateMany(
       { _id: { $in: incidentIds } },
-      { $set: updateData }
+      { 
+        $set: { 
+          ...updateData,
+          verificationNeeded: false // 👈 CLEAR FLAG FOR ALL
+        } 
+      }
     );
 
     // Add action logs
@@ -258,6 +271,13 @@ exports.bulkIncidentActions = async (req, res, next) => {
         });
         await incident.save();
       }
+    }
+
+    // 🚨 CRITICAL: Refresh admin dashboard
+    if (req.io) {
+      console.log(`📡 Bulk action ${action}: Emitting incidentUpdated to admin room`);
+      req.io.to('admin').emit('incidentUpdated', { bulk: true, count: result.modifiedCount });
+      req.io.emit('incidentUpdated', { bulk: true }); // Global for safety
     }
 
     res.status(200).json({

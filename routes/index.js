@@ -8,7 +8,6 @@ const userRoutes = require('./users');
 const notificationRoutes = require('./notifications');
 const dashboardRoutes = require('./dashboard');
 const uploadRoutes = require('./upload');
-const dummyDriverRoutes = require('./dummyDrivers');
 
 // Health & Info Routes
 router.get('/health', (req, res) => {
@@ -169,7 +168,6 @@ router.use('/notifications', notificationRoutes);
 router.use('/dashboard', dashboardRoutes);
 router.use('/upload', uploadRoutes);
 router.use('/admin', require('./admin'));
-router.use('/drivers', dummyDriverRoutes);
 
 // Root endpoint
 router.get('/', (req, res) => {

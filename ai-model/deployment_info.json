@@ -1,0 +1,17 @@
+{
+    "model_version": "v1.0",
+    "training_date": "2026-03-23T07:44:07.958143",
+    "classes": [
+        "car_collidedwith_obstacle",
+        "car_rollover",
+        "car_with_car",
+        "car_with_motorcycle",
+        "motorcycle_crash",
+        "non_accident"
+    ],
+    "thresholds": {
+        "accident": 40,
+        "high_alert": 70,
+        "critical": 85
+    }
+}
