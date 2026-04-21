@@ -2651,10 +2651,10 @@ exports.approveIncident = async (req, res, next) => {
   try {
     const incident = await Incident.findById(req.params.id);
 
-    if (!incident || incident.status !== 'pending') {
+    if (!incident || (incident.status !== 'pending' && !(incident.status === 'rejected' && incident.verificationNeeded))) {
       return res.status(400).json({ 
         success: false, 
-        message: 'Invalid incident' 
+        message: 'Invalid incident or already processed' 
       });
     }
 
@@ -2992,10 +2992,10 @@ exports.rejectIncident = async (req, res, next) => {
   try {
     const incident = await Incident.findById(req.params.id);
 
-    if (!incident) {
+    if (!incident || (incident.status !== 'pending' && !(incident.status === 'rejected' && incident.verificationNeeded))) {
       return res.status(404).json({
         success: false,
-        message: 'Incident not found'
+        message: 'Incident not found or already processed'
       });
     }
 
